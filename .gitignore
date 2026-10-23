@@ -1,0 +1,2 @@
+.env
+script/seed_kmarket.py

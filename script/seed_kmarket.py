@@ -57,8 +57,6 @@ ROLES = [
 
 def parse_args():
     p = argparse.ArgumentParser(description="Génère des données Market K-store (PostgreSQL + MongoDB)")
-    p.add_argument("--pg-dsn", default=os.getenv("PG_DSN", "postgresql://postgres:postgres@localhost:5432/market"))
-    p.add_argument("--mongo-uri", default=os.getenv("MONGO_URI", "mongodb://localhost:27017/market"))
     p.add_argument("--mongo-db", default=os.getenv("MONGO_DB", "market"))
     p.add_argument("--customers", type=int, default=1000)
     p.add_argument("--products", type=int, default=300)
@@ -300,6 +298,15 @@ def main():
     # ----- PostgreSQL (une seule transaction) -----
     conn = psycopg2.connect(args.pg_dsn)
     try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT current_database(),
+                    current_user,
+                    inet_server_addr(),
+                    inet_server_port(),
+                    to_regclass('orders.customers')
+            """)
+            print("PYTHON CONNECTION:", cur.fetchone())
         with conn, conn.cursor() as cur:
             if args.reset:
                 cur.execute("""
