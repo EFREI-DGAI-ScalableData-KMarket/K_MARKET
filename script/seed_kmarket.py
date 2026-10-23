@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""
-Market K-store : génération de données cohérentes PostgreSQL + MongoDB.
-
-Boutique K-culture : albums, merch, livres sur la Corée, produits digitaux.
-(Groupes et plateforme de streaming fictifs.)
-
-Exemples :
-  python scripts/seed_kstore.py --reset
-  python scripts/seed_kstore.py --reset --customers 5000 --products 800 --orders 50000 --fraud-bursts 5
-
-Cohérence :
-  - tous les product_id de PostgreSQL (order_items, stock) existent dans MongoDB (catalog)
-  - unit_price_cents = price_cents du catalogue ; orders.total_cents = somme des lignes
-  - payments cohérents avec le statut de la commande
-  - les produits digitaux n'ont PAS de ligne de stock
-Scénarios pour les démos :
-  - popularité en loi de puissance : quelques groupes concentrent les ventes
-  - pic « comeback » : une fenêtre de 6 h où un groupe domine les commandes
-  - ruptures de stock (0) et stocks bas ; éditions limitées à faible stock
-  - rafales de fraude : un client enchaîne des petites commandes avec paiements refusés
-"""
 import argparse
 import hashlib
 import os
@@ -36,7 +15,7 @@ GROUPS = [
     "NOVA9", "LUNARIA", "STELLARBOYS", "MOONLIT", "ECLIPSE7", "HALOGIRLS",
     "AURORA", "KINETIC", "BLOOMY", "NEONCREW", "SEOULSTAR", "VELVETINE",
     "PRISM", "ZENITH", "CHERRYBOMB", "ORBIT", "TWILIGHT5", "MIRAGE",
-    "SUNDAY", "COMETS", "LUMEN", "DAYBREAK", "WILDFIRE", "STARDUST",
+    "SUNDAY", "COMETS", "LUMEN", "DAYBREAK", "WILDFIRE", "STARDUST"
 ]
 COULEURS = ["noir", "blanc", "gris", "rose", "bleu", "violet", "beige"]
 ALBUM_A = ["Neon", "Midnight", "First", "Sweet", "Blue", "Paper", "Velvet", "Golden", "Silent", "Wild"]
@@ -54,16 +33,6 @@ MERCH = [
     ("Poster set", 1200, 2200, lambda g: {"artist": g, "format": "A2", "pieces": random.choice([3, 5, 8])}),
     ("Porte-clés", 800, 1600, lambda g: {"artist": g, "matiere": random.choice(["acrylique", "métal"])}),
     ("Porte-photocards", 700, 1500, lambda g: {"artist": g, "couleur": random.choice(COULEURS)}),
-]
-
-# produits digitaux : (nom, prix en centimes, attributs)
-DIGITAL = [
-    ("Abonnement streaming drama - 1 mois", 790, {"duree_mois": 1}),
-    ("Abonnement streaming drama - 3 mois", 1990, {"duree_mois": 3}),
-    ("Abonnement streaming drama - 12 mois", 6990, {"duree_mois": 12}),
-    ("Carte cadeau 20 EUR", 2000, {"valeur_eur": 20}),
-    ("Carte cadeau 50 EUR", 5000, {"valeur_eur": 50}),
-    ("Carte cadeau 100 EUR", 10000, {"valeur_eur": 100}),
 ]
 
 BOOK_TEMPLATES = [
@@ -127,14 +96,14 @@ def build_catalog(n, fake, now):
 
     products, weight, group_of = [], {}, {}
 
-    def add(category, name, price, tags, description, attributes, w, group=None, force_active=False):
+    def add(category, name, price, tags, description, attributes, w, group=None):
         pid = len(products) + 1
         products.append({
             "product_id": pid,
             "name": name,
             "category": category,
             "price_cents": price,
-            "status": "active" if (force_active or random.random() < 0.95) else "inactive",
+            "status": "active" if random.random() < 0.95 else "inactive",
             "tags": tags,
             "description": description,
             "attributes": attributes,
@@ -144,17 +113,9 @@ def build_catalog(n, fake, now):
         if group:
             group_of[pid] = group
 
-    n_digital = min(len(DIGITAL), n)
-    remaining = n - n_digital
-    n_books = int(remaining * 0.15)
-    n_merch = int(remaining * 0.30)
-    n_albums = remaining - n_books - n_merch
-
-    for name, price, attrs in DIGITAL[:n_digital]:
-        add("Digital", name, price, ["digital", "streaming" if "Abonnement" in name else "cadeau"],
-            fake.sentence(nb_words=10),
-            {**attrs, "livraison": "email", "plateforme": "HallyuPlay (fictif)"},
-            0.25, force_active=True)
+    n_books = int(n * 0.15)
+    n_merch = int(n * 0.30)
+    n_albums = n - n_books - n_merch
 
     for _ in range(n_albums):
         g = random.choices(group_list, weights=group_weights)[0]
@@ -196,8 +157,6 @@ def build_catalog(n, fake, now):
 def build_stock(products, warehouse_ids):
     rows = []
     for p in products:
-        if p["category"] == "Digital":
-            continue  # pas de stock physique
         limited = p["attributes"].get("limited_edition", False)
         chosen = [w for w in warehouse_ids if random.random() < 0.7] or [random.choice(warehouse_ids)]
         for w in chosen:
@@ -233,15 +192,15 @@ def payment_for(order):
 
 def build_orders(args, products, weight, group_of, comeback_group, now):
     price = {p["product_id"]: p["price_cents"] for p in products}
-    category = {p["product_id"]: p["category"] for p in products}
     active = [p["product_id"] for p in products if p["status"] == "active"]
 
     cum_base = list(accumulate(weight[pid] for pid in active))
     cum_peak = list(accumulate(weight[pid] * (30 if group_of.get(pid) == comeback_group else 1)
                                for pid in active))
 
-    pool = [p for p in products if p["category"] == "Digital"] or products
-    cheap_ids = [p["product_id"] for p in sorted(pool, key=lambda x: x["price_cents"])[:5]]
+    cheap_ids = [p["product_id"] for p in
+                 sorted((p for p in products if p["status"] == "active"),
+                        key=lambda x: x["price_cents"])[:5]]
 
     peak_start = (now - timedelta(days=14)).replace(hour=18, minute=0, second=0, microsecond=0)
     peak_end = peak_start + timedelta(hours=6)
@@ -255,7 +214,7 @@ def build_orders(args, products, weight, group_of, comeback_group, now):
 
     def make_order(customer_id, ts, status, product_ids):
         items = [{"product_id": pid,
-                  "quantity": 1 if category[pid] == "Digital" else random.randint(1, 4),
+                  "quantity": random.randint(1, 4),
                   "unit_price_cents": price[pid]} for pid in product_ids]
         return {
             "customer_id": customer_id,
@@ -279,7 +238,7 @@ def build_orders(args, products, weight, group_of, comeback_group, now):
         orders.append(make_order(random.randint(1, args.customers), ts,
                                  order_status_for(ts, now), pick(random.randint(1, 5), cum)))
 
-    # Rafales de fraude : même client, petits montants digitaux, paiements refusés, quelques secondes d'écart
+    # Rafales de fraude : même client, petits montants, paiements refusés, quelques secondes d'écart
     for _ in range(args.fraud_bursts):
         cid = random.randint(1, args.customers)
         start = now - timedelta(days=random.randint(1, 30), seconds=random.randint(0, 80000))
