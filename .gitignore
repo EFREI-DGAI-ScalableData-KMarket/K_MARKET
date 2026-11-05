@@ -1,2 +1,24 @@
+# secrets
 .env
-script/seed_kmarket.py
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# Java / Spark
+target/
+*.class
+spark-warehouse/
+checkpoints/
+metastore_db/
+
+# éditeurs / OS
+.idea/
+.vscode/
+.DS_Store
