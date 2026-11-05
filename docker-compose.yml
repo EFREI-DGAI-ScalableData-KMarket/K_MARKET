@@ -22,7 +22,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./db/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d kmarket"]
+      # -h 127.0.0.1 : pendant l'initialisation, le serveur temporaire n'écoute que sur le socket local.
+      # Tester en TCP évite d'être « healthy » avant la fin des scripts de docker-entrypoint-initdb.d.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d kmarket"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -42,7 +44,8 @@ services:
       - mongodata:/data/db
       - ./db/mongo:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      # --host mongo : pendant l'initialisation, le serveur temporaire n'écoute que sur 127.0.0.1.
+      test: ["CMD", "mongosh", "--quiet", "--host", "mongo", "--eval", "db.adminCommand('ping').ok"]
       interval: 5s
       timeout: 5s
       retries: 20
