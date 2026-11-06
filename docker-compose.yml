@@ -1,0 +1,72 @@
+# KMarket — démarrage : `make up` (ou `docker compose up -d --build`)
+# Les scripts de db/postgres et db/mongo ne s'exécutent qu'au PREMIER démarrage (volume vide).
+# Pour tout réinitialiser : `make reset`.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kmarket
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?voir .env}
+      # lus par db/postgres/08_roles.sh
+      ORDERS_DB_PASSWORD: ${ORDERS_DB_PASSWORD:?voir .env}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?voir .env}
+      PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?voir .env}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?voir .env}
+    command: ["postgres", "-c", "wal_level=logical"]   # prêt pour un CDC (Debezium) plus tard
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 : pendant l'initialisation, le serveur temporaire n'écoute que sur le socket local.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d kmarket"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?voir .env}
+      MONGO_INITDB_DATABASE: kmarket
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:?voir .env}   # lu par db/mongo/01_catalog.js
+    command: ["--wiredTigerCacheSizeGB", "0.5"]
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongodata:/data/db
+      - ./db/mongo:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--host", "mongo", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Remplit les bases une seule fois (ne fait rien si elles contiennent déjà des données).
+  seed:
+    build: ./seed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      PG_DSN: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/kmarket
+      MONGO_URI: mongodb://root:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_DB: kmarket
+      DEMO_PASSWORD: ${DEMO_PASSWORD:?voir .env}
+      ORDERS_API_KEY: ${ORDERS_API_KEY:?voir .env}
+      CATALOG_API_KEY: ${CATALOG_API_KEY:?voir .env}
+      STREAM_CONSUMER_API_KEY: ${STREAM_CONSUMER_API_KEY:?voir .env}
+    command: ["--orders", "${SEED_ORDERS:-20000}"]
+    restart: "no"
+
+volumes:
+  pgdata:
+  mongodata:

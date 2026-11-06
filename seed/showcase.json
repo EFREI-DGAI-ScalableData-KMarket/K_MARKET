@@ -1,0 +1,27 @@
+{
+  "_comment": "Vitrine réelle pour la démo. Titres et dates réels ; versions et prix inventés. Le seed crée un produit par version (category = Album) et un produit par lightstick (category = Lightstick).",
+  "albums": [
+    { "artist": "Stray Kids", "title": "★★★★★ (5-STAR)",            "type": "studio",  "release_date": "2023-06-02", "price_cents": 2890, "versions": ["Standard", "Limited"] },
+    { "artist": "Stray Kids", "title": "ATE",                        "type": "mini",    "release_date": "2024-07-19", "price_cents": 2490, "versions": ["Standard", "Accordion"] },
+    { "artist": "Stray Kids", "title": "HOP",                        "type": "mixtape", "release_date": "2024-12-13", "price_cents": 2490, "versions": ["Standard"] },
+    { "artist": "Stray Kids", "title": "KARMA",                      "type": "studio",  "release_date": "2025-08-22", "price_cents": 2990, "versions": ["Standard", "Limited", "Digipack"] },
+    { "artist": "Stray Kids", "title": "DO IT",                      "type": "mixtape", "release_date": "2025-11-21", "price_cents": 2490, "versions": ["Standard", "Limited"] },
+
+    { "artist": "BTS",        "title": "BE",                         "type": "studio",  "release_date": "2020-11-20", "price_cents": 2990, "versions": ["Essential Edition"] },
+    { "artist": "BTS",        "title": "Proof",                      "type": "anthology","release_date": "2022-06-10", "price_cents": 5990, "versions": ["Standard", "Compact"] },
+    { "artist": "BTS",        "title": "ARIRANG",                    "type": "studio",  "release_date": "2026-03-20", "price_cents": 3290, "versions": ["Standard", "Limited", "Weverse Albums"] },
+
+    { "artist": "ATEEZ",      "title": "GOLDEN HOUR : Part.1",       "type": "mini",    "release_date": "2024-05-31", "price_cents": 2490, "versions": ["Standard", "Digipack"] },
+    { "artist": "ATEEZ",      "title": "GOLDEN HOUR : Part.2",       "type": "mini",    "release_date": "2024-11-15", "price_cents": 2490, "versions": ["Standard", "Digipack"] },
+    { "artist": "ATEEZ",      "title": "GOLDEN HOUR : Part.3",       "type": "mini",    "release_date": "2025-06-13", "price_cents": 2490, "versions": ["Standard", "Digipack"] },
+    { "artist": "ATEEZ",      "title": "GOLDEN HOUR : Part.4",       "type": "mini",    "release_date": "2026-02-06", "price_cents": 2590, "versions": ["Standard", "Digipack"] },
+    { "artist": "ATEEZ",      "title": "GOLDEN HOUR : Part.5",       "type": "mini",    "release_date": "2026-06-26", "price_cents": 2590, "versions": ["Standard", "Limited"] },
+
+    { "artist": "CORTIS",     "title": "COLOR OUTSIDE THE LINES",    "type": "mini",    "release_date": "2025-09-08", "price_cents": 2290, "versions": ["Scene 1", "Standard"] }
+  ],
+  "lightsticks": [
+    { "artist": "Stray Kids", "name": "Stray Kids Official Lightstick (Nachimbong)", "version": "Ver.2", "price_cents": 5990 },
+    { "artist": "BTS",        "name": "BTS Official Light Stick (ARMY Bomb)",        "version": "SE",    "price_cents": 6490 },
+    { "artist": "ATEEZ",      "name": "ATEEZ Official Lightstick (Lightiny)",        "version": "Ver.2", "price_cents": 5990 }
+  ]
+}
