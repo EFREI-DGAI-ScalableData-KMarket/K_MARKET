@@ -35,7 +35,6 @@
 5. **« Pouvait-on faire mieux ? »**
    Oui. Un index composite `(customer_id, created_at)` renverrait les lignes déjà triées, et l'étape `Sort` disparaîtrait. Le gain est faible ici (tri de 42 Ko en mémoire), mais le dire montre que tu comprends ce que fait l'index.
 
-Envie que je modifie le script pour la question 2 ? Il ferait deux mesures sans index et n'afficherait que la seconde, et il donnerait un résumé court au lieu des 170 lignes de plan.
 
 
 # Sur la sauvegarde 
