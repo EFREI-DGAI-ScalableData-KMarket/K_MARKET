@@ -90,14 +90,7 @@ BOOK_TEMPLATES = [  # (titre, genre, tags)
 # Répartition des produits générés par catégorie (en plus de la vitrine)
 CATEGORY_SHARE = {"Album": 0.35, "Lightstick": 0.05, "Merch": 0.22, "Drama": 0.13, "Livre": 0.12, "Beaute": 0.13}
 
-# Rôles applicatifs (décision D3) — exactement ceux du sujet
-ROLES = [
-    ("admin", "Responsable plateforme : tout lire, tout écrire, gérer les utilisateurs"),
-    ("catalog_manager", "Équipe catalogue : produits et prix, lecture des stocks"),
-    ("analyst", "Équipe BI et marketing : lecture seule"),
-    ("logistics", "Équipe logistique : lecture des commandes, stocks et entrepôts"),
-    ("service_account", "Compte technique d'un service : appels limités à son besoin"),
-]
+# Les 5 rôles applicatifs (D3) sont créés par db/postgres/05_auth.sql : le seed ne fait que les attribuer.
 DEMO_ACCOUNTS = [  # comptes fixes pour la démo (un par rôle humain)
     ("admin@market.test", "admin"),
     ("catalog@market.test", "catalog_manager"),
@@ -122,12 +115,12 @@ PG_TABLES = [
     "orders.order_items", "orders.idempotency_keys", "orders.orders", "orders.customers",
     "payments.payments",
     "inventory.reservations", "inventory.shipments", "inventory.stock", "inventory.warehouses",
-    "auth.refresh_tokens", "auth.api_keys", "auth.user_roles", "auth.users", "auth.roles",
+    "auth.refresh_tokens", "auth.api_keys", "auth.user_roles", "auth.users",  # auth.roles : référence, jamais vidée
 ]
 SERIAL_TABLES = [
     "orders.customers", "orders.orders", "orders.order_items", "payments.payments",
     "inventory.warehouses", "inventory.reservations", "inventory.shipments",
-    "auth.users", "auth.roles", "auth.api_keys", "auth.refresh_tokens",
+    "auth.users", "auth.api_keys", "auth.refresh_tokens",
 ]
 
 
@@ -482,9 +475,8 @@ def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
 # --------------------------------------------------------------------------------------
 # Comptes internes (auth)
 # --------------------------------------------------------------------------------------
-def build_auth(args, fake, now, demo_password):
-    role_rows = [(i, name, desc) for i, (name, desc) in enumerate(ROLES, start=1)]
-    role_id = {name: rid for rid, name, _ in role_rows}
+def build_auth(args, fake, now, demo_password, role_id):
+    """role_id : {nom: id}, lu dans auth.roles (créée par 05_auth.sql)."""
 
     user_rows, user_role_rows = [], []
     for email, role in DEMO_ACCOUNTS:
@@ -502,7 +494,7 @@ def build_auth(args, fake, now, demo_password):
 
     api_key_rows = [(i, name, sha256(require_env(env)), role_id["service_account"], True, now)
                     for i, (name, env) in enumerate(SERVICE_KEYS, start=1)]
-    return role_rows, user_rows, user_role_rows, api_key_rows
+    return user_rows, user_role_rows, api_key_rows
 
 
 # --------------------------------------------------------------------------------------
@@ -552,7 +544,6 @@ def main():
         customer_rows = [(i, fake.name(), fake.unique.safe_email(),
                           now - timedelta(days=args.days + random.randint(0, 365)))
                          for i in range(1, args.customers + 1)]
-        role_rows, user_rows, user_role_rows, api_key_rows = build_auth(args, fake, now, demo_password)
 
         # ----- PostgreSQL : une seule transaction ; MongoDB écrit juste avant le COMMIT -----
         counts = dict.fromkeys(["orders", "items", "payments", "reservations", "shipments"], 0)
@@ -568,7 +559,13 @@ def main():
             cur.execute("SELECT orders.ensure_monthly_partitions(%s, %s)",
                         ((now - timedelta(days=args.days + 31)).date(), (now + timedelta(days=365)).date()))
 
-            ins("INSERT INTO auth.roles (id, name, description) VALUES %s", role_rows)
+            cur.execute("SELECT name, id FROM auth.roles")
+            role_id = dict(cur.fetchall())
+            expected = {"admin", "catalog_manager", "analyst", "logistics", "service_account"}
+            if not expected <= role_id.keys():
+                sys.exit(f"Rôles manquants dans auth.roles : {sorted(expected - role_id.keys())} "
+                         "(créés par db/postgres/05_auth.sql)")
+            user_rows, user_role_rows, api_key_rows = build_auth(args, fake, now, demo_password, role_id)
             ins("INSERT INTO auth.users (id, email, password_hash, is_active, created_at) VALUES %s", user_rows)
             ins("INSERT INTO auth.user_roles (user_id, role_id) VALUES %s", user_role_rows)
             ins("INSERT INTO auth.api_keys (id, name, key_hash, role_id, is_active, created_at) VALUES %s", api_key_rows)
@@ -638,7 +635,7 @@ def main():
     print(f"             shipments      {counts['shipments']:>9}")
     print(f"             warehouses     {len(warehouses):>9}")
     print(f"             stock          {len(stock_rows):>9}  (dont {sum(1 for r in stock_rows if r[2] == 0)} à zéro)")
-    print(f"             users / roles  {len(user_rows):>5} / {len(role_rows)}   api_keys {len(api_key_rows)}")
+    print(f"             users / roles  {len(user_rows):>5} / {len(role_id)}   api_keys {len(api_key_rows)}")
     print(f"  Groupe en comeback (pic) : {comeback_group}")
     print(f"  Comptes de démo : {', '.join(e for e, _ in DEMO_ACCOUNTS)} (mot de passe : $DEMO_PASSWORD)")
 

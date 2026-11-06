@@ -6,7 +6,7 @@ Décisions validées en binôme. Chacune est reliée à une exigence du sujet et
 |---|---|---|---|
 | D1 | Catégories K-culture : `Album`, `Lightstick`, `Merch`, `Drama`, `Livre`, `Beaute` | MongoDB car « les produits n'ont pas tous les mêmes caractéristiques » | `db/mongo/01_catalog.js`, `seed/seed.py` |
 | D2 | Statuts de commande : `pending`, `stock_reserved`, `paid`, `preparing`, `shipped`, `delivered`, `payment_failed`, `cancelled` | Onglet Commandes (payée, en préparation, paiement en échec, livrée) et saga | `db/postgres/02_orders.sql` |
-| D3 | Rôles applicatifs : `admin`, `catalog_manager`, `analyst`, `logistics`, `service_account` | Modèle RBAC et matrice des droits du sujet | `seed/seed.py` (auth.roles) |
+| D3 | Rôles applicatifs : `admin`, `catalog_manager`, `analyst`, `logistics`, `service_account` | Modèle RBAC et matrice des droits du sujet | `db/postgres/05_auth.sql` (création des rôles) ; `seed/seed.py` (comptes de démo) |
 | D4 | `orders` et `order_items` partitionnées par mois ; `payments` non partitionnée ; idempotence des commandes dans `orders.idempotency_keys` | Partitionnement « commandes par date » + idempotence | `db/postgres/02_orders.sql`, `04_payments.sql`, `06_partitions.sql` |
 | D5 | Livraisons dans `inventory.shipments` (service Stock) | Onglet Logistique : « données de stock et de livraison » | `db/postgres/03_inventory.sql` |
 | D6 | Clé d'API par service, échangée contre un JWT court de rôle `service_account` | « compte technique avec sa propre clé d'API » (.docx) + « jeton court » (slides) | `db/postgres/05_auth.sql` (auth.api_keys) |
