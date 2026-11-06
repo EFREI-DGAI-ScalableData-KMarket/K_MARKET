@@ -1,4 +1,4 @@
-Sur explain 
+# Sur explain 
 
 | Requête (500 055 commandes, 26 partitions) | Sans index | Avec index |
 |---|---|---|
@@ -36,3 +36,10 @@ Sur explain
    Oui. Un index composite `(customer_id, created_at)` renverrait les lignes déjà triées, et l'étape `Sort` disparaîtrait. Le gain est faible ici (tri de 42 Ko en mémoire), mais le dire montre que tu comprends ce que fait l'index.
 
 Envie que je modifie le script pour la question 2 ? Il ferait deux mesures sans index et n'afficherait que la seconde, et il donnerait un résumé court au lieu des 170 lignes de plan.
+
+
+# Sur la sauvegarde 
+À quelle fréquence sauvegardez-vous ? » Ici, à la demande. En production : une sauvegarde complète par jour, plus l’archivage continu du journal des transactions (WAL), qui permet de revenir à n’importe quelle minute.
+« Combien de données pouvez-vous perdre au maximum ? » C’est le RPO. Avec une sauvegarde par jour, jusqu’à 24 heures de commandes.
+« Combien de temps pour tout remettre en route ? » C’est le RTO. Mesure la durée de make restore-test sur 500 000 commandes : c’est ton chiffre.
+« Où sont stockées les sauvegardes ? » Pour l’instant sur la même machine que les bases, ce qui ne protège pas d’une perte de la machine. En production, elles iraient ailleurs, par exemple dans le stockage objet du lake.
