@@ -1,7 +1,7 @@
-.PHONY: help up down reset seed reseed logs psql mongo
+.PHONY: help up down reset seed reseed logs psql mongo explain backup restore-test
 
 help:            ## Liste les commandes
-	@grep -E '^[a-z]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-8s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
 .env:
 	@echo "Fichier .env absent : cp .env.example .env, puis remplacez les valeurs." && exit 1
@@ -31,3 +31,12 @@ psql:            ## Ouvre psql en superutilisateur
 
 mongo:           ## Ouvre mongosh sur la base kmarket
 	docker compose exec mongo sh -c 'mongosh -u root -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin kmarket'
+
+explain:         ## Démo EXPLAIN avant/après index (après make reseed ORDERS=500000)
+	docker compose exec -T postgres psql -U postgres -d kmarket -X < db/demo/explain.sql
+
+backup:          ## Sauvegarde PostgreSQL + MongoDB dans backups/
+	./scripts/backup.sh
+
+restore-test:    ## Restaure la dernière sauvegarde dans des bases de test et compare
+	./scripts/restore-test.sh
