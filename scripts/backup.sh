@@ -2,6 +2,7 @@
 # backup.sh — sauvegarde PostgreSQL + MongoDB dans backups/<date-heure>/
 # Usage : make backup
 set -euo pipefail
+umask 077    # sauvegardes lisibles par leur seul propriétaire
 cd "$(dirname "$0")/.."
 
 DEST="backups/$(date +%Y%m%d-%H%M%S)"
