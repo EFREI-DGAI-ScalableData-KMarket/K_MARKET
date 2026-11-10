@@ -1,0 +1,375 @@
+openapi: 3.0.3
+info:
+  title: Market — Service Auth
+  version: v1
+  description: |
+    API REST du service d'authentification. Émet les JWT, gère les
+    utilisateurs et les rôles (RBAC). Mots de passe en bcrypt, clés d'API en SHA-256.
+    Toutes les routes sont préfixées par /v1.
+servers:
+  - url: http://localhost:8005/v1
+    description: Développement local
+  - url: http://auth-api:8005/v1
+    description: Réseau Docker
+
+tags:
+  - name: Health
+    description: Santé du service
+  - name: Auth
+    description: Connexion et jetons
+  - name: Users
+    description: Gestion des utilisateurs (admin)
+  - name: Roles
+    description: Gestion des rôles (admin)
+  - name: ApiKeys
+    description: Gestion des clés d'API des services (admin)
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Vérifier que le service est vivant
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: v1 }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Se connecter et obtenir un JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, example: admin@market.local }
+                password: { type: string, format: password, example: "Secret123!" }
+      responses:
+        '200':
+          description: Connexion réussie
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401':
+          description: Identifiants invalides
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Renouveler un JWT expiré
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: Nouveau couple de jetons
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401':
+          description: Refresh token invalide ou expiré
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Révoquer le refresh token courant
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Déconnecté
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Profil de l'utilisateur connecté
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profil
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/token:
+    post:
+      tags: [Auth]
+      summary: Échanger une clé d'API contre un JWT court
+      description: |
+        Appelé par les services (orders-api, inventory-api, etc.) pour obtenir
+        un JWT de rôle service_account. La clé est envoyée en header.
+      security:
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: JWT obtenu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401':
+          description: Clé d'API invalide ou révoquée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/users:
+    get:
+      tags: [Users]
+      summary: Lister les utilisateurs (admin)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des utilisateurs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [Users]
+      summary: Créer un utilisateur (admin)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, roles]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 8 }
+                roles:
+                  type: array
+                  items: { $ref: '#/components/schemas/RoleName' }
+      responses:
+        '201':
+          description: Utilisateur créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Email déjà utilisé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/roles:
+    get:
+      tags: [Roles]
+      summary: Lister les rôles disponibles (admin)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des rôles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Role' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------
+  # API KEYS (comptes techniques des services)
+  # ------------------------------------------------------------------
+  /admin/api-keys:
+    get:
+      tags: [ApiKeys]
+      summary: Lister les clés d'API (admin)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des clés d'API
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ApiKey' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [ApiKeys]
+      summary: Créer une clé d'API pour un service (admin)
+      description: |
+        La clé est générée aléatoirement, hachée en SHA-256, et stockée.
+        La clé en clair n'est renvoyée qu'une seule fois, à la création.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, role_id]
+              properties:
+                name: { type: string, example: orders-api }
+                role_id: { type: integer, example: 5 }
+      responses:
+        '201':
+          description: Clé créée (la clé en clair n'est visible qu'ici)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Nom de clé déjà utilisé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/api-keys/{key_id}:
+    delete:
+      tags: [ApiKeys]
+      summary: Révoquer une clé d'API (admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '204':
+          description: Clé révoquée
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Clé d'API d'un service technique (SHA-256, stockée hachée)
+
+  responses:
+    Unauthorized:
+      description: Jeton absent, invalide ou expiré (401)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle insuffisant (403)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Requête invalide (400)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource introuvable (404)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    RoleName:
+      type: string
+      enum: [admin, catalog_manager, analyst, logistics, service_account]
+
+    Role:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { $ref: '#/components/schemas/RoleName' }
+        description: { type: string }
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string, format: email }
+        is_active: { type: boolean }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RoleName' }
+        created_at: { type: string, format: date-time }
+
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT valable 15 minutes
+        refresh_token:
+          type: string
+          description: Jeton de renouvellement (stocké haché en base)
+        token_type: { type: string, example: Bearer }
+        expires_in: { type: integer, example: 900 }
+
+    ApiKey:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, example: orders-api }
+        role_id: { type: integer }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    ApiKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          properties:
+            key:
+              type: string
+              description: Clé en clair (visible une seule fois, à conserver côté service)
+              example: sk_live_abc123...
+
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: UNAUTHORIZED }
+        message: { type: string }
+        request_id: { type: string, format: uuid }

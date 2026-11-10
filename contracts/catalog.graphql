@@ -1,0 +1,197 @@
+"""
+Service Catalogue — GraphQL
+Schéma flexible : les attributs varient selon la catégorie (validator oneOf MongoDB).
+Le contrôle d'accès se fait sur chaque query et mutation (rôles RBAC).
+"""
+
+scalar JSON
+scalar DateTime
+
+enum ProductStatus {
+  active
+  inactive
+}
+
+enum Category {
+  Album
+  Lightstick
+  Merch
+  Drama
+  Livre
+  Beaute
+}
+
+enum AlbumType {
+  studio
+  mini
+  single
+  mixtape
+  anthology
+}
+
+enum DramaSupport {
+  DVD
+  Blu_ray  
+  Coffret
+  Artbook
+}
+
+enum Langue {
+  fr
+  en
+  ko
+}
+
+
+type AlbumAttributes {
+  artist: String!
+  version: String!
+  type: AlbumType!
+  release_date: String!
+  photocards: Int
+  limited_edition: Boolean
+}
+
+type LightstickAttributes {
+  artist: String!
+  version: String!
+  bluetooth: Boolean
+  piles: String
+}
+
+type MerchAttributes {
+  artist: String!
+  type: String!
+  size: [String!]
+  couleur: [String!]
+  matiere: String
+}
+
+type DramaAttributes {
+  serie: String!
+  saison: Int
+  episodes: Int
+  support: DramaSupport!
+  sous_titres: [String!]
+}
+
+type LivreAttributes {
+  isbn: String!
+  langue: Langue!
+  auteur: String
+  pages: Int
+  genre: String
+}
+
+type BeauteAttributes {
+  marque: String!
+  type: String
+  contenance_ml: Int!
+  type_peau: String
+  ingredients: [String!]
+}
+
+"""
+Union des attributs possibles. Le client choisit le type concret
+selon la catégorie du produit (via __typename ou un fragment).
+"""
+union ProductAttributes =
+    AlbumAttributes
+  | LightstickAttributes
+  | MerchAttributes
+  | DramaAttributes
+  | LivreAttributes
+  | BeauteAttributes
+
+
+type Product {
+  product_id: Int!
+  name: String!
+  category: Category!
+  price_cents: Int!
+  tags: [String!]!
+  description: String
+  attributes: ProductAttributes!
+  status: ProductStatus!
+  indexed_at: DateTime
+}
+
+type ProductPage {
+  items: [Product!]!
+  total: Int!
+  has_more: Boolean!
+}
+
+
+input ProductFilter {
+  category: Category
+  status: ProductStatus
+  search: String
+  min_price_cents: Int
+  max_price_cents: Int
+  limit: Int = 50
+  offset: Int = 0
+}
+
+"""
+Input polymorphe : le client envoie un JSON brut pour `attributes`,
+et le resolver valide côté serveur selon la catégorie (validator MongoDB).
+On ne peut pas faire un input union en GraphQL, donc JSON est le compromis.
+"""
+input ProductInput {
+  name: String!
+  category: Category!
+  price_cents: Int!
+  tags: [String!]
+  description: String
+  attributes: JSON!
+}
+
+
+enum ErrorCode {
+  UNAUTHORIZED
+  FORBIDDEN
+  NOT_FOUND
+  VALIDATION_ERROR
+  CONFLICT
+}
+
+type Error {
+  code: ErrorCode!
+  message: String!
+  request_id: String
+}
+
+union ProductResult = Product | Error
+
+
+
+type Query {
+  "Lister les produits avec filtres et pagination"
+  products(filter: ProductFilter): ProductPage!
+
+  "Lire un produit par son identifiant"
+  product(product_id: Int!): Product
+
+  "Rechercher des produits (plein texte, index MongoDB french)"
+  searchProducts(query: String!, limit: Int = 10): [Product!]!
+
+  "Lister les produits d'une catégorie"
+  productsByCategory(category: Category!, status: ProductStatus): [Product!]!
+}
+
+
+
+type Mutation {
+  "Créer un produit (catalog_manager ou admin)"
+  createProduct(input: ProductInput!): ProductResult!
+
+  "Mettre à jour un produit (catalog_manager ou admin)"
+  updateProduct(product_id: Int!, input: ProductInput!): ProductResult!
+
+  "Archiver un produit (au lieu de le supprimer)"
+  archiveProduct(product_id: Int!): ProductResult!
+
+  "Réactiver un produit archivé"
+  reactivateProduct(product_id: Int!): ProductResult!
+}

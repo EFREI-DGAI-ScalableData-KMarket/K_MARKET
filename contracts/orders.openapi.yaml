@@ -1,0 +1,253 @@
+openapi: 3.0.3
+info:
+  title: Market — Service Commandes
+  version: v1
+  description: |
+    API REST du service Commandes. Orchestre la Saga : réservation du stock,
+    paiement, puis mise à jour du statut. Toutes les routes sont préfixées par /v1.
+servers:
+  - url: http://localhost:8001/v1
+    description: Développement local
+  - url: http://orders-api:8001/v1
+    description: Réseau Docker
+
+tags:
+  - name: Orders
+    description: Gestion des commandes
+  - name: Health
+    description: Santé du service
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Vérifier que le service est vivant
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: v1 }
+
+  /orders:
+    get:
+      tags: [Orders]
+      summary: Lister les commandes récentes
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+        - name: customer_id
+          in: query
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Liste paginée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Order' }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [Orders]
+      summary: Créer une commande (Saga)
+      description: |
+        Orchestration Saga :
+        1. Vérifie l'idempotence (clé `Idempotency-Key`).
+        2. Appelle le Catalogue pour valider les produits et récupérer les prix.
+        3. Appelle l'Inventory pour réserver le stock (`POST /stock/reserve`).
+        4. Appelle le Paiement (`POST /payments`).
+        5. Si paiement OK → statut `paid`. Sinon → libère le stock (`POST /stock/release`) et statut `payment_failed`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+          description: Clé unique pour éviter les doublons
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCreate' }
+      responses:
+        '201':
+          description: Commande créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Conflit d'idempotence (commande déjà créée avec cette clé)
+        '422':
+          description: Stock insuffisant ou paiement refusé
+
+  /orders/{order_id}:
+    get:
+      tags: [Orders]
+      summary: Lire une commande et ses lignes
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Détail de la commande
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /orders/{order_id}/status:
+    patch:
+      tags: [Orders]
+      summary: Mettre à jour le statut (usage interne / logistique)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/OrderStatus' }
+      responses:
+        '200':
+          description: Statut mis à jour
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Transition de statut invalide (ex: paid → pending interdit)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Jeton absent, invalide ou expiré (401)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle insuffisant (403)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource introuvable (404)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Requête invalide (400)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    OrderStatus:
+      type: string
+      enum:
+        - pending
+        - stock_reserved
+        - paid
+        - preparing
+        - shipped
+        - delivered
+        - payment_failed
+        - cancelled
+
+    OrderCreate:
+      type: object
+      required: [customer_id, items]
+      properties:
+        customer_id: { type: integer, example: 42 }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [product_id, quantity]
+            properties:
+              product_id: { type: integer, example: 101 }
+              quantity: { type: integer, minimum: 1, example: 2 }
+
+    Order:
+      type: object
+      properties:
+        id: { type: integer }
+        reference: { type: string, example: ORD-2026-000123 }
+        customer_id: { type: integer }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        total_cents: { type: integer, example: 4990 }
+        created_at: { type: string, format: date-time }
+
+    OrderDetail:
+      allOf:
+        - $ref: '#/components/schemas/Order'
+        - type: object
+          properties:
+            customer:
+              type: object
+              properties:
+                id: { type: integer }
+                name: { type: string }
+                email: { type: string, format: email }
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  product_id: { type: integer }
+                  product_name: { type: string, description: Récupéré via l'API Catalogue }
+                  quantity: { type: integer }
+                  unit_price_cents: { type: integer }
+                  line_total_cents: { type: integer }
+
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: FORBIDDEN }
+        message: { type: string, example: "Rôle analyst insuffisant pour POST /orders" }
+        request_id: { type: string, format: uuid }
