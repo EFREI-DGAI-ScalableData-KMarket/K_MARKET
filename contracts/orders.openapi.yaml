@@ -220,11 +220,11 @@ components:
       type: object
       properties:
         id: { type: integer }
-        reference: { type: string, example: ORD-2026-000123 }
         customer_id: { type: integer }
         status: { $ref: '#/components/schemas/OrderStatus' }
         total_cents: { type: integer, example: 4990 }
         created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     OrderDetail:
       allOf:

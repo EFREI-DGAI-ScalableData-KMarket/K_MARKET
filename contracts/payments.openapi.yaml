@@ -169,6 +169,7 @@ components:
         amount_cents: { type: integer }
         currency: { type: string }
         status: { $ref: '#/components/schemas/PaymentStatus' }
+        failure_reason: { type: string, nullable: true, example: amount_over_limit } 
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 

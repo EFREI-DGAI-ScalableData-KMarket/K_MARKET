@@ -428,6 +428,7 @@ def iter_orders(args, products, weight, group_of, comeback_group, now):
 def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
     """Lignes PostgreSQL d'une commande : order, items, payment, reservations, shipment."""
     ts, status = o["created_at"], o["status"]
+    idem_keys = []  
     items, reservations, payments, shipments = [], [], [], []
     updated_at = ts
 
@@ -469,7 +470,8 @@ def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
         updated_at = delivered or shipped or created
 
     order_row = (o["id"], o["customer_id"], status, o["total_cents"], ts, updated_at)
-    return order_row, items, payments, reservations, shipments, item_id, res_id, pay_id, ship_id
+    idem_keys.append((str(uuid.uuid4()), o["id"], ts))
+    return order_row, items, payments, reservations, shipments,idem_keys, item_id, res_id, pay_id, ship_id
 
 
 # --------------------------------------------------------------------------------------
@@ -546,7 +548,7 @@ def main():
                          for i in range(1, args.customers + 1)]
 
         # ----- PostgreSQL : une seule transaction ; MongoDB écrit juste avant le COMMIT -----
-        counts = dict.fromkeys(["orders", "items", "payments", "reservations", "shipments"], 0)
+        counts = dict.fromkeys(["orders", "items", "payments", "reservations", "shipments", "idem_keys"], 0)
         status_count = {}
         with conn, conn.cursor() as cur:
             def ins(sql, rows):
@@ -575,7 +577,7 @@ def main():
             ins("INSERT INTO inventory.stock (product_id, warehouse_id, quantity, updated_at) VALUES %s", stock_rows)
             ins("INSERT INTO orders.customers (id, name, email, created_at) VALUES %s", customer_rows)
 
-            buf = {"o": [], "i": [], "p": [], "r": [], "s": []}
+            buf = {"o": [], "i": [], "p": [], "r": [], "s": [],"k": []}
             ids = [1, 1, 1, 1]  # item_id, res_id, pay_id, ship_id
 
             def flush():
@@ -583,6 +585,9 @@ def main():
                     buf["o"])
                 ins("INSERT INTO orders.order_items (id, order_id, order_created_at, product_id, quantity, "
                     "unit_price_cents) VALUES %s", buf["i"])
+                if buf["k"]:                                             
+                    ins("INSERT INTO orders.idempotency_keys (idempotency_key, order_id, order_created_at) VALUES %s",
+                        buf["k"])
                 if buf["p"]:
                     ins("INSERT INTO payments.payments (id, order_id, idempotency_key, amount_cents, status, "
                         "failure_reason, created_at) VALUES %s", buf["p"])
@@ -592,19 +597,21 @@ def main():
                 if buf["s"]:
                     ins("INSERT INTO inventory.shipments (id, order_id, warehouse_id, status, created_at, "
                         "shipped_at, delivered_at) VALUES %s", buf["s"])
+                
                 for k, key in (("orders", "o"), ("items", "i"), ("payments", "p"),
-                               ("reservations", "r"), ("shipments", "s")):
+                               ("reservations", "r"), ("shipments", "s"), ("idem_keys", "k")):
                     counts[k] += len(buf[key])
                     buf[key].clear()
 
             for o in iter_orders(args, products, weight, group_of, comeback_group, now):
-                order_row, items, pays, ress, ships, *new_ids = expand_order(o, stock_wh, all_wids, now, *ids)
+                order_row, items, pays, ress, ships,idem_keys, *new_ids = expand_order(o, stock_wh, all_wids, now, *ids)
                 ids = new_ids
                 buf["o"].append(order_row)
                 buf["i"] += items
                 buf["p"] += pays
                 buf["r"] += ress
                 buf["s"] += ships
+                buf["k"] += idem_keys  
                 status_count[o["status"]] = status_count.get(o["status"], 0) + 1
                 if len(buf["o"]) >= BATCH_ORDERS:
                     flush()
@@ -633,6 +640,7 @@ def main():
     print(f"             payments       {counts['payments']:>9}")
     print(f"             reservations   {counts['reservations']:>9}")
     print(f"             shipments      {counts['shipments']:>9}")
+    print(f"             idempotency    {counts['idem_keys']:>9}")
     print(f"             warehouses     {len(warehouses):>9}")
     print(f"             stock          {len(stock_rows):>9}  (dont {sum(1 for r in stock_rows if r[2] == 0)} à zéro)")
     print(f"             users / roles  {len(user_rows):>5} / {len(role_id)}   api_keys {len(api_key_rows)}")
