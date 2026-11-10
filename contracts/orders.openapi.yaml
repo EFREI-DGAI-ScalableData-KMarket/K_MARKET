@@ -154,7 +154,10 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Transition de statut invalide (ex: paid → pending interdit)
+          description: "Transition de statut invalide (ex: delivered -> pending interdit)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
 components:
   securitySchemes:
