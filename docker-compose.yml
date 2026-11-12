@@ -151,6 +151,25 @@ services:
         echo "Bucket $$LAKE_BUCKET prêt."
     restart: "no"
 
+  # Client S3 (mc) prêt à l'emploi : alias "local" déjà pointé sur le MinIO interne.
+  # Ne démarre pas avec `make up` (profil "tools"). Utilisation :
+  #   docker compose run --rm mc ls local/kmarket-lake
+  #   docker compose run --rm mc cp /data-in/fichier.csv local/kmarket-lake/raw/
+  # Le dossier courant de l'hôte est monté en lecture seule dans /data-in pour l'upload.
+  mc:
+    image: cgr.dev/chainguard/minio-client:latest
+    profiles: ["tools"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      # alias "local" configuré automatiquement (variable MC_HOST_<alias>)
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    volumes:
+      - ./:/data-in:ro
+    entrypoint: ["/usr/bin/mc"]
+    command: ["ls", "local/${LAKE_BUCKET:-kmarket-lake}"]
+
   # --- Spark : jobs de streaming (Kafka) et transformations du Data Lake ---
   # Image officielle Apache Spark (bitnami/spark a été retiré de Docker Hub mi-2025).
   spark-master:
@@ -181,25 +200,8 @@ services:
     volumes:
       - ./spark:/opt/spark-apps:ro
 
-  # --- Tailscale : expose la stack sur le tailnet de l'équipe (démo à distance) ---
-  tailscale:
-    image: tailscale/tailscale:latest
-    container_name: kmarket-tailscale
-    hostname: ${TS_HOSTNAME:-kmarket}
-    restart: unless-stopped
-    environment:
-      TS_AUTHKEY: ${TS_AUTHKEY:?voir .env}
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_USERSPACE: "true"
-      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
-    volumes:
-      - tailscaledata:/var/lib/tailscale
-    cap_add:
-      - NET_ADMIN
-
 volumes:
   pgdata:
   mongodata:
   kafkadata:
   miniodata:
-  tailscaledata:

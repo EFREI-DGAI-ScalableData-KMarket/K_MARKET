@@ -1,4 +1,4 @@
-.PHONY: help up down reset seed reseed logs psql mongo explain backup restore-test kafka spark minio
+.PHONY: help up down reset seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio
 
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
@@ -40,6 +40,18 @@ spark:           ## Ouvre un shell Spark sur le master (console web : http://loc
 
 minio:           ## Ouvre un shell mc dans le conteneur MinIO (console web : http://localhost:9001)
 	docker compose exec minio sh
+
+mc:              ## Client S3 mc : passer la commande dans ARGS (make mc ARGS="ls local/kmarket-lake")
+	docker compose run --rm mc $(ARGS)
+
+mc-ls:           ## Liste tout le contenu du bucket du lake (arborescence)
+	docker compose run --rm mc ls --recursive local/kmarket-lake
+
+mc-up:           ## Envoie un fichier de l'hôte vers le lake (make mc-up FILE=chemin DEST=raw/)
+	docker compose run --rm mc cp /data-in/$(FILE) local/kmarket-lake/$(DEST)
+
+share-minio:     ## Partage MinIO sur Internet via tunnel SSH, sans VPN (make share-minio ; ou MODE=console)
+	./scripts/share-minio.sh $(MODE)
 
 explain:         ## Démo EXPLAIN avant/après index (après make reseed ORDERS=500000)
 	docker compose exec -T postgres psql -U postgres -d kmarket -X < db/demo/explain.sql

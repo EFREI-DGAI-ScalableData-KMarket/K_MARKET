@@ -30,6 +30,12 @@ Après une modification dans `db/`, lancer `make reset`.
 | `make reset` | Supprime les volumes et réinitialise tout |
 | `make reseed ORDERS=500000` | Regénère les données (500 000 commandes pour la démo EXPLAIN) |
 | `make psql` / `make mongo` | Ouvre une console sur la base |
+| `make mc-ls` | Liste le contenu du bucket MinIO du Data Lake |
+| `make mc-up FILE=data.csv DEST=raw/` | Envoie un fichier de l'hôte vers le lake |
+| `make share-minio` | Partage MinIO sur Internet via un tunnel SSH (affiche l'URL ; garder le terminal ouvert) |
+
+Pour qu'une coéquipière lance sa propre stack et compare son Data Lake avec le mien :
+voir [docs/connexion-minio-distant.md](docs/connexion-minio-distant.md).
 
 ## Comptes de démo
 
