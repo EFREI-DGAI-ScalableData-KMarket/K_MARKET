@@ -1,13 +1,28 @@
-.PHONY: help up down reset seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio
-
+.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
 .env:
 	@echo "Fichier .env absent : cp .env.example .env, puis remplacez les valeurs." && exit 1
 
-up: .env         ## Démarre les bases et lance le seed (une seule fois)
+# --- Démarrage par profil -------------------------------------------------
+up: .env         ## Démarre les bases + seed (rien d'autre)
 	docker compose up -d --build
+
+up-lake: .env    ## Démarre les bases + seed + MinIO (Data Lake)
+	docker compose --profile lake up -d --build
+
+up-stream: .env  ## Démarre les bases + seed + Kafka (streaming)
+	docker compose --profile stream up -d --build
+
+up-spark: .env   ## Démarre les bases + seed + Spark
+	docker compose --profile spark up -d --build
+
+up-lake-stream: .env  ## Bases + seed + MinIO + Kafka
+	docker compose --profile lake --profile stream up -d --build
+
+up-all: .env     ## Démarre tout (bases + seed + MinIO + Kafka + Spark)
+	docker compose --profile lake --profile stream --profile spark up -d --build
 
 down:            ## Arrête les conteneurs (les données sont conservées)
 	docker compose down
@@ -15,6 +30,10 @@ down:            ## Arrête les conteneurs (les données sont conservées)
 reset: .env      ## Supprime les volumes et réinitialise tout (scripts d'init + seed)
 	docker compose down -v
 	docker compose up -d --build
+
+reset-all: .env  ## Réinitialise tout (bases + MinIO + Kafka + Spark)
+	docker compose --profile lake --profile stream --profile spark down -v
+	docker compose --profile lake --profile stream --profile spark up -d --build
 
 seed: .env       ## Relance le seed (ne fait rien si les bases sont déjà peuplées)
 	docker compose run --rm seed
