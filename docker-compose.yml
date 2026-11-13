@@ -83,7 +83,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-        
+    labels: # <-- AJOUTE CES LIGNES
+      - "traefik.enable=true"
+      - "traefik.http.routers.stock.rule=PathPrefix(`/v1/stock`) || PathPrefix(`/health`)"
+      - "traefik.http.routers.stock.entrypoints=web"
+      - "traefik.http.services.stock.loadbalancer.server.port=8001"
+
   # --- Kafka (KRaft, sans ZooKeeper) ---
   # Deux listeners : INTERNAL (kafka:19092) pour les conteneurs, EXTERNAL (localhost:9092) pour l'hôte.
   kafka:
@@ -222,7 +227,20 @@ services:
       - spark-master
     volumes:
       - ./spark:/opt/spark-apps:ro
-
+  gateway:
+    image: traefik:v3.7
+    container_name: gateway
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true" # Active le dashboard Traefik (http://localhost:8082)
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false" # Sécurité : on n'expose que ce qu'on veut
+      - "--entrypoints.web.address=:8000" # La Gateway écoute sur le port 8000
+    ports:
+      - "127.0.0.1:8000:8000" # Le port d'entrée de l'API
+      - "127.0.0.1:8082:8080" # Le port du dashboard Traefik
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Permet à Traefik de voir les autres conteneurs
 volumes:
   pgdata:
   mongodata:
