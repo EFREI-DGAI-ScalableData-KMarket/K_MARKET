@@ -8,8 +8,45 @@ Projet final du Mastère Spécialisé Data & Generative AI Engineering — Bloc 
 Prérequis : Docker avec Docker Compose, et `make`.
 
 ```bash
-cp .env.example .env      # puis remplacer chaque « change-me »
-make up                   # bases + scripts d'initialisation + seed
+cp .env.example .env    
+```
+
+Ensuite, choix de la commande selon ce qui doit être lancer :
+
+| Commande | Ce qu'elle lance | Quand l'utiliser |
+|---|---|---|
+| `make up` | PostgreSQL + MongoDB + seed | Volet 1, Volet 3 (APIs) |
+| `make up-lake` | + MinIO | Volet 2 (Data Lake) |
+| `make up-stream` | + Kafka + Kafka UI | Volet 4 (streaming) |
+| `make up-spark` | + Spark master + worker | Volets 2 et 4 (jobs Spark) |
+| `make up-lake-stream` | + MinIO + Kafka | Volets 2 et 4 ensemble |
+| `make up-all` | Tout | Démo finale |
+
+**Exemples :**
+
+```bash
+# Travailler sur les bases et les APIs (léger)
+make up
+
+# Travailler sur le Data Lake (MinIO + Spark)
+make up-lake
+make up-spark
+
+# Tout lancer pour la démo finale
+make up-all
+```
+
+Pour tout réinitialiser (volumes supprimés, scripts d'init rejoués) :
+
+```bash
+make reset          # bases uniquement
+make reset-all      # tout (bases + MinIO + Kafka + Spark)
+```
+
+Pour arrêter les conteneurs (les données sont conservées) :
+
+```bash
+make down
 ```
 
 Au premier démarrage :
@@ -30,6 +67,12 @@ Après une modification dans `db/`, lancer `make reset`.
 | `make reset` | Supprime les volumes et réinitialise tout |
 | `make reseed ORDERS=500000` | Regénère les données (500 000 commandes pour la démo EXPLAIN) |
 | `make psql` / `make mongo` | Ouvre une console sur la base |
+| `make mc-ls` | Liste le contenu du bucket MinIO du Data Lake |
+| `make mc-up FILE=data.csv DEST=raw/` | Envoie un fichier de l'hôte vers le lake |
+| `make share-minio` | Partage MinIO sur Internet via un tunnel SSH (affiche l'URL ; garder le terminal ouvert) |
+
+Pour qu'une coéquipière lance sa propre stack et compare son Data Lake avec le mien :
+voir [docs/connexion-minio-distant.md](docs/connexion-minio-distant.md).
 
 ## Comptes de démo
 

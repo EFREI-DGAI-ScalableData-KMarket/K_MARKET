@@ -67,6 +67,147 @@ services:
     command: ["--orders", "${SEED_ORDERS:-20000}"]
     restart: "no"
 
+  # --- Kafka (KRaft, sans ZooKeeper) ---
+  # Deux listeners : INTERNAL (kafka:19092) pour les conteneurs, EXTERNAL (localhost:9092) pour l'hôte.
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: kafka
+    profiles: ["stream"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # Console web Kafka (topics, partitions, lag des consommateurs).
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    profiles: ["stream"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # --- MinIO : stockage objet S3 du Data Lake (zones raw / staging / curated / consumption) ---
+  # Image Chainguard : MinIO ne publie plus d'image Docker communautaire depuis octobre 2025 (voir docs/decisions.md).
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    container_name: minio
+    profiles: ["lake"]
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?voir .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?voir .env}
+    ports:
+      - "127.0.0.1:9000:9000"   # API S3
+      - "127.0.0.1:9001:9001"   # console web
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      # L'image est distroless (pas de curl/wget) : on sonde via le client mc intégré.
+      test: ["CMD-SHELL", "mc alias set hc http://127.0.0.1:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" >/dev/null 2>&1 && mc ready hc"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # Crée le bucket du lake une seule fois, puis se termine.
+  minio-init:
+    image: cgr.dev/chainguard/minio-client:latest
+    profiles: ["lake"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?voir .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?voir .env}
+      LAKE_BUCKET: ${LAKE_BUCKET:-kmarket-lake}
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$LAKE_BUCKET" &&
+        echo "Bucket $$LAKE_BUCKET prêt."
+    restart: "no"
+
+  # Client S3 (mc) prêt à l'emploi : alias "local" déjà pointé sur le MinIO interne.
+  # Ne démarre pas avec `make up` (profil "tools"). Utilisation :
+  #   docker compose run --rm mc ls local/kmarket-lake
+  #   docker compose run --rm mc cp /data-in/fichier.csv local/kmarket-lake/raw/
+  # Le dossier courant de l'hôte est monté en lecture seule dans /data-in pour l'upload.
+  mc:
+    image: cgr.dev/chainguard/minio-client:latest
+    profiles: ["tools", "lake"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      # alias "local" configuré automatiquement (variable MC_HOST_<alias>)
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    volumes:
+      - ./:/data-in:ro
+    entrypoint: ["/usr/bin/mc"]
+    command: ["ls", "local/${LAKE_BUCKET:-kmarket-lake}"]
+
+  # --- Spark : jobs de streaming (Kafka) et transformations du Data Lake ---
+  # Image officielle Apache Spark (bitnami/spark a été retiré de Docker Hub mi-2025).
+  spark-master:
+    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+    container_name: spark-master
+    profiles: ["spark"] 
+    restart: unless-stopped
+    command: ["/opt/spark/sbin/start-master.sh"]
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_MASTER_HOST: spark-master
+    ports:
+      - "127.0.0.1:7077:7077"   # URL du master (spark://spark-master:7077)
+      - "127.0.0.1:8081:8080"   # interface web du master
+    volumes:
+      - ./spark:/opt/spark-apps:ro
+
+  spark-worker:
+    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+    container_name: spark-worker
+    profiles: ["spark"] 
+    restart: unless-stopped
+    command: ["/opt/spark/sbin/start-worker.sh", "spark://spark-master:7077"]
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2G}
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark:/opt/spark-apps:ro
+
 volumes:
   pgdata:
   mongodata:
+  kafkadata:
+  miniodata:

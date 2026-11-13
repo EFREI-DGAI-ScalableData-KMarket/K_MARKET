@@ -26,4 +26,4 @@ Décisions validées en binôme. Chacune est reliée à une exigence du sujet et
 |---|---|---|
 | Gateway | NGINX + `auth_request` vers auth-api, ou Kong | NGINX open source ne valide pas un JWT seul (`auth_jwt` = NGINX Plus) |
 | Langage des services | Tout en TypeScript, ou Stock en Java (Spring Boot) | Critère : chacune doit pouvoir expliquer le code de l'autre |
-| Stockage objet du lake | RustFS, fork `pgsty/minio`, `cgr.dev/chainguard/minio` | MinIO ne publie plus d'image Docker communautaire depuis octobre 2025 |
+| Stockage objet du lake | ~~RustFS, fork `pgsty/minio`, `cgr.dev/chainguard/minio`~~ → **`cgr.dev/chainguard/minio`** retenu | MinIO ne publie plus d'image Docker communautaire depuis octobre 2025. Image Chainguard testée (serveur + client `minio-client`), configurée dans `docker-compose.yml`. |
