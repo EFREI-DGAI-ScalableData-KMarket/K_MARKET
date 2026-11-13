@@ -25,10 +25,10 @@ up-all: .env     ## Démarre tout (bases + seed + MinIO + Kafka + Spark)
 	docker compose --profile lake --profile stream --profile spark up -d --build
 
 down:            ## Arrête les conteneurs (les données sont conservées)
-	docker compose down
+	docker compose --profile lake --profile stream --profile spark down
 
 reset: .env      ## Supprime les volumes et réinitialise tout (scripts d'init + seed)
-	docker compose down -v
+	docker compose --profile lake --profile stream --profile spark down -v
 	docker compose up -d --build
 
 reset-all: .env  ## Réinitialise tout (bases + MinIO + Kafka + Spark)
