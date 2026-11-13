@@ -29,7 +29,7 @@ CREATE TABLE inventory.reservations (
 
 CREATE TABLE inventory.shipments (
     id            SERIAL PRIMARY KEY,
-    order_id      INTEGER     NOT NULL,   -- lien logique -> orders.orders.id
+    order_id      INTEGER     NOT NULL UNIQUE,   -- UNIQUE (1 expédition par commande)
     warehouse_id  INTEGER     NOT NULL REFERENCES inventory.warehouses (id),
     status        TEXT        NOT NULL DEFAULT 'preparing'
                   CHECK (status IN ('preparing', 'shipped', 'delivered')),

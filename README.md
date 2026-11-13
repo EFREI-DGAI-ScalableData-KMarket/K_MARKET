@@ -3,6 +3,10 @@
 Plateforme data d'un e-commerçant K-culture (K-pop, K-drama, K-beauty).
 Projet final du Mastère Spécialisé Data & Generative AI Engineering — Bloc 1.
 
+## Equipe - Kstore 
+- Hosniath DE BADAR BADAROU 
+- Huong Giang (Emmy) DINH
+
 ## Démarrer
 
 Prérequis : Docker avec Docker Compose, et `make`.

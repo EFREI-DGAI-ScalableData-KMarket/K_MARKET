@@ -1,0 +1,192 @@
+openapi: 3.0.3
+info:
+  title: Market — Service Paiement
+  version: v1
+  description: |
+    API REST du service Paiement. Encaisse une commande de manière idempotente.
+    Refuse les montants supérieurs à 200 € (règle métier de l'exemple).
+    Toutes les routes sont préfixées par /v1.
+servers:
+  - url: http://localhost:8003/v1
+    description: Développement local
+  - url: http://payments-api:8003/v1
+    description: Réseau Docker
+
+tags:
+  - name: Health
+    description: Santé du service
+  - name: Payments
+    description: Paiements et remboursements
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Vérifier que le service est vivant
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: v1 }
+
+  /payments:
+    post:
+      tags: [Payments]
+      summary: Encaisser une commande (Saga étape 3)
+      description: |
+        Appelé par le service Commandes après réservation du stock.
+        Idempotent via `Idempotency-Key` et `UNIQUE (idempotency_key)`.
+        Refuse si montant > 200 € (règle métier) → statut `failed`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+          description: Clé unique pour éviter un double débit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentCreate' }
+      responses:
+        '201':
+          description: Paiement accepté
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Paiement déjà existant pour cette clé d'idempotence
+        '422':
+          description: Paiement refusé (montant > 200 €)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentFailedError' }
+
+  /payments/{order_id}:
+    get:
+      tags: [Payments]
+      summary: Lire le paiement d'une commande
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Paiement de la commande
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /payments/{order_id}/refund:
+    post:
+      tags: [Payments]
+      summary: Rembourser une commande (compensation Saga)
+      description: |
+        Appelé si la commande est annulée après un paiement réussi.
+        Passe le paiement à `refunded`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Paiement remboursé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Paiement déjà remboursé ou non payé }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Jeton absent, invalide ou expiré (401)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle insuffisant (403)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource introuvable (404)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Requête invalide (400)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    PaymentStatus:
+      type: string
+      enum: [pending, succeeded, failed, refunded]
+
+    PaymentCreate:
+      type: object
+      required: [order_id, amount_cents]
+      properties:
+        order_id: { type: integer, example: 1234 }
+        amount_cents: { type: integer, minimum: 1, example: 4990 }
+        currency: { type: string, default: EUR, enum: [EUR] }
+
+    Payment:
+      type: object
+      properties:
+        id: { type: integer }
+        order_id: { type: integer }
+        amount_cents: { type: integer }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        failure_reason: { type: string, nullable: true, example: amount_over_limit } 
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PaymentFailedError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            reason:
+              type: string
+              enum: [amount_exceeds_limit, card_declined]
+            amount_cents: { type: integer }
+            limit_cents: { type: integer, example: 20000 }
+
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: PAYMENT_FAILED }
+        message: { type: string }
+        request_id: { type: string, format: uuid }

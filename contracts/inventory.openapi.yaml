@@ -1,0 +1,440 @@
+openapi: 3.0.3
+info:
+  title: Market — Service Stock (Inventory)
+  version: v1
+  description: |
+    API REST du service Stock. Gère les entrepôts, les quantités, les réservations
+    et les expéditions. Toutes les routes sont préfixées par /v1.
+    Rôles autorisés : inventory_svc (interne), logistics, admin.
+servers:
+  - url: http://localhost:8002/v1
+    description: Développement local
+  - url: http://inventory-api:8002/v1
+    description: Réseau Docker
+
+tags:
+  - name: Health
+    description: Santé du service
+  - name: Stock
+    description: Consultation et mise à jour des stocks
+  - name: Reservations
+    description: Réservation et libération de stock (Saga)
+  - name: Warehouses
+    description: Entrepôts et taux de remplissage
+  - name: Shipments
+    description: Expéditions
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Vérifier que le service est vivant
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: v1 }
+
+  # ------------------------------------------------------------------
+  # STOCK
+  # ------------------------------------------------------------------
+  /stock/{product_id}:
+    get:
+      tags: [Stock]
+      summary: Lire le stock d'un produit (tous entrepôts confondus)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: product_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Stock du produit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /stock:
+    post:
+      tags: [Stock]
+      summary: Créer le stock d'un nouveau produit
+      description: |
+        Appelé par le service Catalogue après création d'un produit (lien logique).
+        Répartit la quantité initiale sur un entrepôt par défaut.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id, warehouse_id, quantity]
+              properties:
+                product_id: { type: integer, example: 101 }
+                warehouse_id: { type: integer, example: 1 }
+                quantity: { type: integer, minimum: 0, example: 100 }
+      responses:
+        '201':
+          description: Stock créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Stock déjà existant pour ce produit dans cet entrepôt
+
+  /stock/{product_id}/warehouses:
+    get:
+      tags: [Stock]
+      summary: Détail du stock d'un produit par entrepôt
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: product_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Liste des stocks par entrepôt
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StockItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------
+  # RESERVATIONS (Saga)
+  # ------------------------------------------------------------------
+  /stock/reserve:
+    post:
+      tags: [Reservations]
+      summary: Réserver du stock pour une commande (Saga étape 2)
+      description: |
+        Appelé par le service Commandes. Décrémente le stock disponible et crée
+        une réservation. Idempotent via UNIQUE (order_id, product_id, warehouse_id).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReserveRequest' }
+      responses:
+        '201':
+          description: Stock réservé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reservation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Réservation déjà existante (idempotence) }
+        '422':
+          description: Stock insuffisant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InsufficientStockError' }
+
+  /stock/release:
+    post:
+      tags: [Reservations]
+      summary: Libérer une réservation (compensation Saga)
+      description: |
+        Appelé par le service Commandes si le paiement échoue.
+        Remet le stock en disponible et passe la réservation à `released`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id]
+              properties:
+                order_id: { type: integer, example: 1234 }
+      responses:
+        '200':
+          description: Réservation libérée
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------
+  # WAREHOUSES
+  # ------------------------------------------------------------------
+  /warehouses:
+    get:
+      tags: [Warehouses]
+      summary: Lister les entrepôts et leur taux de remplissage
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des entrepôts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Warehouse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /warehouses/{warehouse_id}:
+    get:
+      tags: [Warehouses]
+      summary: Détail d'un entrepôt
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: warehouse_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Détail de l'entrepôt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Warehouse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------
+  # SHIPMENTS
+  # ------------------------------------------------------------------
+  /shipments:
+    get:
+      tags: [Shipments]
+      summary: Lister les expéditions (filtrable par entrepôt ou statut)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: warehouse_id
+          in: query
+          schema: { type: integer }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ShipmentStatus' }
+      responses:
+        '200':
+          description: Liste des expéditions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Shipment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /shipments/{order_id}:
+    post:
+      tags: [Shipments]
+      summary: Créer une expédition pour une commande
+      description: Appelé par la logistique quand la commande passe en `preparing`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [warehouse_id]
+              properties:
+                warehouse_id: { type: integer, example: 1 }
+      responses:
+        '201':
+          description: Expédition créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Shipment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Expédition déjà existante pour cette commande }
+
+  /shipments/{shipment_id}/status:
+    patch:
+      tags: [Shipments]
+      summary: Mettre à jour le statut d'une expédition
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: shipment_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/ShipmentStatus' }
+      responses:
+        '200':
+          description: Statut mis à jour
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Transition de statut invalide }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Jeton absent, invalide ou expiré (401)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle insuffisant (403)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource introuvable (404)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Requête invalide (400)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    StockItem:
+      type: object
+      properties:
+        product_id: { type: integer }
+        warehouse_id: { type: integer }
+        warehouse_name: { type: string }
+        quantity: { type: integer, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+
+    StockSummary:
+      type: object
+      properties:
+        product_id: { type: integer }
+        total_quantity: { type: integer }
+        by_warehouse:
+          type: array
+          items: { $ref: '#/components/schemas/StockItem' }
+
+    Reservation:
+      type: object
+      properties:
+        id: { type: integer }
+        order_id: { type: integer }
+        product_id: { type: integer }
+        warehouse_id: { type: integer }
+        quantity: { type: integer }
+        status:
+          type: string
+          enum: [reserved, committed, released]
+        created_at: { type: string, format: date-time }
+
+    ReserveRequest:
+      type: object
+      required: [order_id, items]
+      properties:
+        order_id: { type: integer, example: 1234 }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [product_id, quantity]
+            properties:
+              product_id: { type: integer, example: 101 }
+              quantity: { type: integer, minimum: 1, example: 2 }
+
+    InsufficientStockError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  product_id: { type: integer }
+                  requested: { type: integer }
+                  available: { type: integer }
+
+    Warehouse:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        capacity_units: { type: integer }
+        used_units: { type: integer }
+        fill_rate:
+          type: number
+          format: float
+          description: used_units / capacity_units (0.0 à 1.0)
+          example: 0.87
+        status:
+          type: string
+          enum: [normal, near_full]
+          description: near_full si fill_rate > 0.90
+
+    ShipmentStatus:
+      type: string
+      enum: [preparing, shipped, delivered]
+
+    Shipment:
+      type: object
+      properties:
+        id: { type: integer }
+        order_id: { type: integer }
+        warehouse_id: { type: integer }
+        status: { $ref: '#/components/schemas/ShipmentStatus' }
+        created_at: { type: string, format: date-time }
+        shipped_at: { type: string, format: date-time, nullable: true }
+        delivered_at: { type: string, format: date-time, nullable: true }
+
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: INSUFFICIENT_STOCK }
+        message: { type: string }
+        request_id: { type: string, format: uuid }

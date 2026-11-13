@@ -56,3 +56,16 @@ make seed
 ```
 → « Bases déjà peuplées : rien à faire ».
 
+
+
+
+
+docker run --rm --network k_market_default \
+  -e PG_DSN="postgresql://postgres:4a8a122e0daf8f3670cf3174813dcb44@postgres:5432/kmarket" \
+  -e MONGO_URI="mongodb://root:d513aafa85ee1f31313a403bfce535f5@mongo:27017/?authSource=admin" \
+  -e MONGO_DB="kmarket" \
+  -e DEMO_PASSWORD="63f866d4ce1aa2eefdf5667ad68b4220" \
+  -e ORDERS_API_KEY="78766f3d96614adcb8592c9a6fbd9c0f" \
+  -e CATALOG_API_KEY="aec79dceffd40f577e2ec30459be4390" \
+  -e STREAM_CONSUMER_API_KEY="5a9ab4d53d8cd8d3023503b075cda7a4" \
+  k_market-seed --reset --orders 1000
