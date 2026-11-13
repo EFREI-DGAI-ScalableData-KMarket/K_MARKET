@@ -17,6 +17,7 @@ import os
 import random
 import sys
 import uuid
+import time
 from datetime import datetime, timedelta, timezone
 from itertools import accumulate
 from pathlib import Path
@@ -513,6 +514,18 @@ def sync_sequences(cur):
         cur.execute(f"SELECT setval(pg_get_serial_sequence(%s, 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) "
                     f"FROM {table}", (table,))
 
+def connect_pg(dsn, retries=10, delay=3):
+    """Connexion PostgreSQL avec retry (le serveur ou le réseau Docker peuvent être lents)."""
+    for attempt in range(1, retries + 1):
+        try:
+            return psycopg2.connect(dsn, connect_timeout=5)
+        except psycopg2.OperationalError as e:
+            if attempt == retries:
+                raise
+            reason = str(e).strip().splitlines()[0]
+            print(f"PostgreSQL pas prêt ({attempt}/{retries}) : {reason} — nouvelle tentative dans {delay}s...",
+                  flush=True)
+            time.sleep(delay)
 
 def main():
     args = parse_args()
@@ -523,9 +536,9 @@ def main():
     now = datetime.now(timezone.utc)
     showcase = json.loads(SHOWCASE_FILE.read_text(encoding="utf-8"))
 
-    mongo = MongoClient(args.mongo_uri)
+    mongo = MongoClient(args.mongo_uri, serverSelectionTimeoutMS=10_000)
     catalog = mongo[args.mongo_db]["catalog"]
-    conn = psycopg2.connect(args.pg_dsn)
+    conn = connect_pg(args.pg_dsn)
 
     try:
         with conn.cursor() as cur:
@@ -615,6 +628,7 @@ def main():
                 status_count[o["status"]] = status_count.get(o["status"], 0) + 1
                 if len(buf["o"]) >= BATCH_ORDERS:
                     flush()
+            print(f"  ... {counts['orders']:>8} commandes insérées", flush=True)
             flush()
             sync_sequences(cur)
 
