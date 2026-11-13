@@ -20,7 +20,7 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/postgres:/docker-entrypoint-initdb.d:ro
+      - ./data/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # -h 127.0.0.1 : pendant l'initialisation, le serveur temporaire n'écoute que sur le socket local.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d kmarket"]
@@ -40,8 +40,8 @@ services:
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
-      - mongodata:/data/db
-      - ./db/mongo:/docker-entrypoint-initdb.d:ro
+      - mongodata:/data/data
+      - ./data/mongo:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--host", "mongo", "--eval", "db.adminCommand('ping').ok"]
       interval: 5s
@@ -88,6 +88,25 @@ services:
       - "traefik.http.routers.stock.rule=PathPrefix(`/v1/stock`) || PathPrefix(`/health`)"
       - "traefik.http.routers.stock.entrypoints=web"
       - "traefik.http.services.stock.loadbalancer.server.port=8001"
+
+  catalog-service:
+    build: ./services/catalog-service
+    container_name: catalog-service
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://root:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_DB: kmarket
+      JWT_SECRET: ${JWT_SECRET:-super-secret-key-change-me}
+    ports:
+      - "127.0.0.1:8002:8002"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.catalog.rule=PathPrefix(`/v1/catalog`)"
+      - "traefik.http.routers.catalog.entrypoints=web"
+      - "traefik.http.services.catalog.loadbalancer.server.port=8002"
 
   # --- Kafka (KRaft, sans ZooKeeper) ---
   # Deux listeners : INTERNAL (kafka:19092) pour les conteneurs, EXTERNAL (localhost:9092) pour l'hôte.
