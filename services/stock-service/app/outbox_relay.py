@@ -15,6 +15,7 @@ import time
 
 import psycopg
 from confluent_kafka import KafkaException, Producer
+from prometheus_client import Counter, Gauge, start_http_server
 from psycopg.rows import dict_row
 
 from app.core.config import settings
@@ -24,6 +25,15 @@ log = logging.getLogger("outbox-relay")
 BATCH_SIZE = 200
 IDLE_SLEEP_S = 1.0
 ERROR_SLEEP_S = 5.0
+RETENTION = "7 days"            # événements publiés conservés 7 jours dans l'outbox (Kafka les garde aussi)
+PURGE_EVERY_S = 3600
+METRICS_PORT = 9100             # /metrics lu par Prometheus
+
+# Métriques Prometheus du relais (débit Kafka et retard de publication)
+PUBLISHED = Counter("outbox_events_published_total", "Événements publiés dans Kafka", ["topic"])
+FAILURES = Counter("outbox_publish_failures_total", "Lots non publiés (Kafka ou PostgreSQL indisponible)")
+PENDING = Gauge("outbox_pending_events", "Événements en attente de publication dans inventory.outbox")
+LAST_SUCCESS = Gauge("outbox_last_success_timestamp_seconds", "Horodatage du dernier lot publié")
 
 
 def make_producer() -> Producer:
@@ -56,7 +66,20 @@ def publish_batch(conn, producer) -> int:
         raise KafkaException(f"{remaining} message(s) non confirmé(s), erreurs : {failures[:3]}")
 
     conn.execute("UPDATE inventory.outbox SET published_at = now() WHERE id = ANY(%s)", ([r["id"] for r in rows],))
+    for r in rows:
+        PUBLISHED.labels(r["topic"]).inc()
+    LAST_SUCCESS.set_to_current_time()
     return len(rows)
+
+
+def count_pending(conn) -> int:
+    return conn.execute("SELECT count(*) AS n FROM inventory.outbox WHERE published_at IS NULL").fetchone()["n"]
+
+
+def purge_published(conn) -> int:
+    """Supprime les événements publiés depuis plus de RETENTION. Un événement en attente n'est jamais supprimé."""
+    return conn.execute("DELETE FROM inventory.outbox WHERE published_at < now() - %s::interval",
+                        (RETENTION,)).rowcount
 
 
 def run(producer=None) -> None:
@@ -64,18 +87,30 @@ def run(producer=None) -> None:
     producer = producer or make_producer()
     dsn = (f"postgresql://{settings.postgres_user}:{settings.postgres_password}"
            f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}")
-    log.info("Relais démarré")
+    start_http_server(METRICS_PORT)
+    log.info("Relais démarré (métriques sur :%d/metrics)", METRICS_PORT)
     while True:
         try:
             with psycopg.connect(dsn, row_factory=dict_row) as conn:
+                last_purge = 0.0
                 while True:
-                    with conn.transaction():
-                        n = publish_batch(conn, producer)
+                    try:
+                        with conn.transaction():
+                            n = publish_batch(conn, producer)
+                    finally:
+                        PENDING.set(count_pending(conn))          # mis à jour même si Kafka est arrêté
                     if n:
                         log.info("%d événement(s) publié(s)", n)
                     else:
                         time.sleep(IDLE_SLEEP_S)
+                    if time.time() - last_purge > PURGE_EVERY_S:
+                        with conn.transaction():
+                            purged = purge_published(conn)
+                        if purged:
+                            log.info("%d événement(s) publié(s) depuis plus de %s supprimé(s)", purged, RETENTION)
+                        last_purge = time.time()
         except Exception as e:                         # Kafka ou PostgreSQL indisponible : on réessaie
+            FAILURES.inc()
             log.warning("Échec (%s), nouvel essai dans %.0f s", e, ERROR_SLEEP_S)
             time.sleep(ERROR_SLEEP_S)
 
