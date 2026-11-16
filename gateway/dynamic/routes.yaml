@@ -1,0 +1,25 @@
+# Routes de la gateway : chemin public -> service interne.
+# Les services gardent le préfixe /v1 : aucune réécriture d'URL.
+
+http:
+  routers:
+    stock:
+      rule: "PathPrefix(`/v1/stock`) || PathPrefix(`/v1/warehouses`) || PathPrefix(`/v1/shipments`)"
+      entryPoints: [web]
+      service: stock
+
+    catalog:
+      rule: "PathPrefix(`/v1/catalog`)"
+      entryPoints: [web]
+      service: catalog
+
+  services:
+    stock:
+      loadBalancer:
+        servers:
+          - url: "http://stock-service:8002"
+
+    catalog:
+      loadBalancer:
+        servers:
+          - url: "http://catalog-service:8004"

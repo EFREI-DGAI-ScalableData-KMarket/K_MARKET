@@ -1,6 +1,10 @@
 # KMarket — démarrage : `make up` (ou `docker compose up -d --build`)
-# Les scripts de db/postgres et db/mongo ne s'exécutent qu'au PREMIER démarrage (volume vide).
+# Les scripts de data/postgres et data/mongo ne s'exécutent qu'au PREMIER démarrage (volume vide).
 # Pour tout réinitialiser : `make reset`.
+#
+# Ports (alignés sur les contrats) :
+#   gateway 8000 · orders 8001 · stock 8002 · payments 8003 · catalog 8004 · auth 8005
+#   dashboard Traefik 8082 · kafka-ui 8080 · spark UI 8081 · minio 9000/9001
 
 services:
   postgres:
@@ -10,7 +14,7 @@ services:
       POSTGRES_DB: kmarket
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?voir .env}
-      # lus par db/postgres/08_roles.sh
+      # lus par data/postgres/08_roles.sh
       ORDERS_DB_PASSWORD: ${ORDERS_DB_PASSWORD:?voir .env}
       INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?voir .env}
       PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?voir .env}
@@ -22,7 +26,8 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./data/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      # -h 127.0.0.1 : pendant l'initialisation, le serveur temporaire n'écoute que sur le socket local.
+      # -h 127.0.0.1 : pendant l'init, le serveur temporaire n'écoute que sur le socket Unix,
+      # donc le conteneur ne devient "healthy" qu'une fois les scripts terminés.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d kmarket"]
       interval: 5s
       timeout: 3s
@@ -35,12 +40,12 @@ services:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?voir .env}
       MONGO_INITDB_DATABASE: kmarket
-      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:?voir .env}   # lu par db/mongo/01_catalog.js
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:?voir .env}   # lu par data/mongo/01_catalog.js
     command: ["--wiredTigerCacheSizeGB", "0.5"]
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
-      - mongodata:/data/data
+      - mongodata:/data/db          # dossier de données de l'image mongo
       - ./data/mongo:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--host", "mongo", "--eval", "db.adminCommand('ping').ok"]
@@ -67,48 +72,61 @@ services:
     command: ["--orders", "${SEED_ORDERS:-20000}"]
     restart: "no"
 
+  # Service Stock (REST)
   stock-service:
     build: ./services/stock-service
     container_name: stock-service
     restart: unless-stopped
     environment:
       POSTGRES_USER: inventory_svc
-      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD}
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:?voir .env}
       POSTGRES_DB: kmarket
-      POSTGRES_HOST: postgres 
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      JWT_SECRET: ${JWT_SECRET:-super-secret-key-change-me}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
     ports:
-      - "127.0.0.1:8001:8001"
+      - "127.0.0.1:8002:8002"
     depends_on:
       postgres:
         condition: service_healthy
-    labels: # <-- AJOUTE CES LIGNES
-      - "traefik.enable=true"
-      - "traefik.http.routers.stock.rule=PathPrefix(`/v1/stock`) || PathPrefix(`/health`)"
-      - "traefik.http.routers.stock.entrypoints=web"
-      - "traefik.http.services.stock.loadbalancer.server.port=8001"
 
+  # Service Catalogue (GraphQL)
   catalog-service:
     build: ./services/catalog-service
     container_name: catalog-service
     restart: unless-stopped
     environment:
-      MONGO_URI: mongodb://root:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      # Compte dédié créé par data/mongo/01_catalog.js (moindre privilège, pas root).
+      MONGO_URI: mongodb://catalog_svc:${CATALOG_DB_PASSWORD:?voir .env}@mongo:27017/kmarket?authSource=kmarket
       MONGO_DB: kmarket
-      JWT_SECRET: ${JWT_SECRET:-super-secret-key-change-me}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+      # Appel à POST /stock après création d'un produit
+      STOCK_URL: http://stock-service:8002/v1
+      AUTH_URL: http://auth-api:8005/v1
+      CATALOG_API_KEY: ${CATALOG_API_KEY:?voir .env}
     ports:
-      - "127.0.0.1:8002:8002"
+      - "127.0.0.1:8004:8004"
     depends_on:
       mongo:
         condition: service_healthy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.catalog.rule=PathPrefix(`/v1/catalog`)"
-      - "traefik.http.routers.catalog.entrypoints=web"
-      - "traefik.http.services.catalog.loadbalancer.server.port=8002"
 
-  # --- Kafka (KRaft, sans ZooKeeper) ---
+  # API Gateway (Traefik) : configuration dans gateway/
+  gateway:
+    image: traefik:v3.7
+    container_name: gateway
+    restart: unless-stopped
+    command: ["--configFile=/etc/traefik/traefik.yaml"]
+    ports:
+      - "127.0.0.1:8000:8000"   # point d'entrée de l'API
+      - "127.0.0.1:8082:8080"   # dashboard Traefik
+    volumes:
+      - ./gateway/traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./gateway/dynamic:/etc/traefik/dynamic:ro
+    depends_on:
+      - stock-service
+      - catalog-service
+
+  # Kafka (KRaft, sans ZooKeeper)
   # Deux listeners : INTERNAL (kafka:19092) pour les conteneurs, EXTERNAL (localhost:9092) pour l'hôte.
   kafka:
     image: apache/kafka:3.9.0
@@ -126,6 +144,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LOG_DIRS: /var/lib/kafka/data   # sinon l'image écrit dans /tmp et le volume reste vide
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -139,8 +158,9 @@ services:
       retries: 20
 
   # Console web Kafka (topics, partitions, lag des consommateurs).
+  # Fork maintenu de provectuslabs/kafka-ui (abandonné).
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: ghcr.io/kafbat/kafka-ui:latest
     container_name: kafka-ui
     profiles: ["stream"]
     restart: unless-stopped
@@ -153,8 +173,8 @@ services:
       kafka:
         condition: service_healthy
 
-  # --- MinIO : stockage objet S3 du Data Lake (zones raw / staging / curated / consumption) ---
-  # Image Chainguard : MinIO ne publie plus d'image Docker communautaire depuis octobre 2025 (voir docs/decisions.md).
+  # MinIO : stockage objet S3 du Data Lake (zones raw / staging / curated / consumption)
+  # Image Chainguard : MinIO ne publie plus d'image Docker communautaire depuis octobre 2025.
   minio:
     image: cgr.dev/chainguard/minio:latest
     container_name: minio
@@ -164,19 +184,20 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?voir .env}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?voir .env}
+      # alias "hc" pour le healthcheck, sans passer par un shell (image distroless)
+      MC_HOST_hc: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@127.0.0.1:9000
     ports:
       - "127.0.0.1:9000:9000"   # API S3
       - "127.0.0.1:9001:9001"   # console web
     volumes:
       - miniodata:/data
     healthcheck:
-      # L'image est distroless (pas de curl/wget) : on sonde via le client mc intégré.
-      test: ["CMD-SHELL", "mc alias set hc http://127.0.0.1:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" >/dev/null 2>&1 && mc ready hc"]
+      test: ["CMD", "mc", "ready", "hc"]
       interval: 10s
       timeout: 5s
       retries: 20
 
-  # Crée le bucket du lake une seule fois, puis se termine.
+  # Crée le bucket du lake une seule fois, puis se termine (sans shell).
   minio-init:
     image: cgr.dev/chainguard/minio-client:latest
     profiles: ["lake"]
@@ -184,16 +205,9 @@ services:
       minio:
         condition: service_healthy
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?voir .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?voir .env}
-      LAKE_BUCKET: ${LAKE_BUCKET:-kmarket-lake}
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
-        mc mb --ignore-existing "local/$$LAKE_BUCKET" &&
-        echo "Bucket $$LAKE_BUCKET prêt."
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    entrypoint: ["/usr/bin/mc"]
+    command: ["mb", "--ignore-existing", "local/${LAKE_BUCKET:-kmarket-lake}"]
     restart: "no"
 
   # Client S3 (mc) prêt à l'emploi : alias "local" déjà pointé sur le MinIO interne.
@@ -203,24 +217,23 @@ services:
   # Le dossier courant de l'hôte est monté en lecture seule dans /data-in pour l'upload.
   mc:
     image: cgr.dev/chainguard/minio-client:latest
-    profiles: ["tools", "lake"]
+    profiles: ["tools"]
     depends_on:
       minio:
         condition: service_healthy
     environment:
-      # alias "local" configuré automatiquement (variable MC_HOST_<alias>)
       MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
     volumes:
       - ./:/data-in:ro
     entrypoint: ["/usr/bin/mc"]
     command: ["ls", "local/${LAKE_BUCKET:-kmarket-lake}"]
 
-  # --- Spark : jobs de streaming (Kafka) et transformations du Data Lake ---
+  # Spark : jobs de streaming (Kafka) et transformations du Data Lake
   # Image officielle Apache Spark (bitnami/spark a été retiré de Docker Hub mi-2025).
   spark-master:
     image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
     container_name: spark-master
-    profiles: ["spark"] 
+    profiles: ["spark"]
     restart: unless-stopped
     command: ["/opt/spark/sbin/start-master.sh"]
     environment:
@@ -235,7 +248,7 @@ services:
   spark-worker:
     image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
     container_name: spark-worker
-    profiles: ["spark"] 
+    profiles: ["spark"]
     restart: unless-stopped
     command: ["/opt/spark/sbin/start-worker.sh", "spark://spark-master:7077"]
     environment:
@@ -246,20 +259,7 @@ services:
       - spark-master
     volumes:
       - ./spark:/opt/spark-apps:ro
-  gateway:
-    image: traefik:v3.7
-    container_name: gateway
-    restart: unless-stopped
-    command:
-      - "--api.insecure=true" # Active le dashboard Traefik (http://localhost:8082)
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false" # Sécurité : on n'expose que ce qu'on veut
-      - "--entrypoints.web.address=:8000" # La Gateway écoute sur le port 8000
-    ports:
-      - "127.0.0.1:8000:8000" # Le port d'entrée de l'API
-      - "127.0.0.1:8082:8080" # Le port du dashboard Traefik
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Permet à Traefik de voir les autres conteneurs
+
 volumes:
   pgdata:
   mongodata:
