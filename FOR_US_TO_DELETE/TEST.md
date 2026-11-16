@@ -70,38 +70,26 @@ docker run --rm --network k_market_default \
   -e STREAM_CONSUMER_API_KEY="5a9ab4d53d8cd8d3023503b075cda7a4" \
   k_market-seed --reset --orders 1000
 
+TEST traffic 
+make traffic 
+et pour tester rate limit 
+seq 600 | xargs -P 100 -I{} curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/v1/warehouses | sort | uniq -c
+Elle envoie 600 requêtes à la gateway, 100 à la fois, puis compte les codes de retour obtenus. Morceau par morceau :
 
+```bash
+seq 600 | xargs -P 100 -I{} curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/v1/warehouses | sort | uniq -c
+```
 
+| Morceau | Rôle |
+|---|---|
+| `seq 600` | Écrit les nombres de 1 à 600, un par ligne. Ils servent juste de compteur : 600 lignes, donc 600 requêtes |
+| `xargs -P 100 -I{} …` | Pour chaque ligne reçue, lance la commande qui suit. `-P 100` : jusqu'à **100 en parallèle**. `-I{}` : on ne se sert pas du nombre lui-même |
+| `curl -s -o /dev/null -w "%{http_code}\n" URL` | Fait une requête GET. `-s` : pas de barre de progression. `-o /dev/null` : jette le corps de la réponse. `-w "%{http_code}\n"` : affiche seulement le code HTTP (401, 429…) |
+| `sort` | Trie les 600 codes, pour regrouper les identiques |
+| `uniq -c` | Compte combien de fois chaque code apparaît |
 
-SELECT product_id, warehouse_id, quantity FROM inventory.stock ORDER BY quantity DESC LIMIT 5;
- product_id | warehouse_id | quantity 
-------------+--------------+----------
-        253 |            1 |      174
-         25 |            1 |      173
-        281 |            1 |      173
-        117 |            1 |      172
-        226 |            1 |      172
-(5 rows)
-SELECT order_id, count(*) FROM inventory.reservations WHERE status = 'reserved' GROUP BY order_id LIMIT 5;
- order_id | count 
-----------+-------
-(0 rows)
-SELECT id, order_id, status FROM inventory.shipments WHERE status = 'preparing' LIMIT 5;
-  id   | order_id |  status   
--------+----------+-----------
- 17833 |    19678 | preparing
- 17834 |    19679 | preparing
- 17841 |    19686 | preparing
- 17842 |    19687 | preparing
- 17848 |    19695 | preparing
-(5 rows)
+Résultat : une ligne par code, du type `263 401` et `37 429`.
+- **401** : la requête a franchi la gateway et atteint le service, qui l'a refusée faute de jeton (la commande n'en envoie pas, exprès).
+- **429** : la gateway l'a bloquée avant, parce qu'il y avait trop de requêtes en même temps.
 
-
- SELECT id, order_id, product_id, warehouse_id, quantity, status
-FROM inventory.reservations WHERE order_id = 2;
- id | order_id | product_id | warehouse_id | quantity |  status   
-----+----------+------------+--------------+----------+-----------
-  2 |        2 |         15 |            4 |        1 | committed
-  3 |        2 |         92 |            1 |        2 | committed
-  4 |        2 |        151 |            1 |        1 | committed
-(3 rows)
+Ça simule un afflux brutal de requêtes, par exemple un client qui s'emballe ou une attaque, pour montrer que la gateway protège les services. C'est la preuve que la limitation d'appels demandée par le sujet fonctionne.

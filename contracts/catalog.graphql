@@ -7,8 +7,12 @@ Noms de champs en snake_case, comme les contrats REST.
 Authentification : en-tête `Authorization: Bearer <JWT>` (émis par auth-api, claim `roles`).
 - Lecture (Query) : tout rôle authentifié (admin, catalog_manager, analyst, logistics, service_account)
 - Écriture (Mutation) : catalog_manager, admin
+
 Images : GET /v1/catalog/images/{product_id}.svg (hors GraphQL, sans jeton : une balise <img>
 n'en envoie pas). Visuel généré à partir du produit (catégorie, nom, prix) ; aucun fichier stocké.
+
+Limitation d'appels (gateway) : au-delà de 50 requêtes/s en moyenne par adresse IP (pointes à 100),
+la gateway répond HTTP 429 Too Many Requests, avant même GraphQL.
 
 Erreurs : erreurs GraphQL standard ; `errors[].extensions.code` vaut une des valeurs de ErrorCode
 (la réponse HTTP reste 200, comme le veut GraphQL). Les détails éventuels sont dans

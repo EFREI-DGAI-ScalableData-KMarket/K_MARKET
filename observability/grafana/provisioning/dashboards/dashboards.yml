@@ -1,10 +1,8 @@
 apiVersion: 1
-datasources:
-  - name: Prometheus
-    uid: prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-    jsonData:
-      timeInterval: 5s
+providers:
+  - name: kmarket
+    folder: KMarket
+    type: file
+    allowUiUpdates: true          
+    options:
+      path: /var/lib/grafana/dashboards

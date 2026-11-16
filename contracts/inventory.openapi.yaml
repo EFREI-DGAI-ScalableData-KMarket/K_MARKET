@@ -20,7 +20,9 @@ info:
     `PUT /v1/stock/{product_id}/warehouses/{warehouse_id}` (le stock est tenu par produit et par entrepôt).
     Chaque refus (401, 403) est journalisé : date, utilisateur, rôles, action.
 
-    Erreurs : toutes les réponses 4xx utilisent le schéma `Error`.
+    Erreurs : toutes les réponses 4xx du service utilisent le schéma `Error`.
+    Limitation d'appels (gateway) : au-delà de 50 requêtes/s en moyenne par adresse IP (pointes à 100),
+    la gateway répond 429 Too Many Requests sans transmettre l'appel au service.
 servers:
   - url: http://localhost:8000/v1
     description: Via la gateway

@@ -2,15 +2,26 @@
 # Les services gardent le préfixe /v1 : aucune réécriture d'URL.
 
 http:
+  middlewares:
+    # Limitation du nombre d'appels, par adresse IP : 50 requêtes/s en moyenne, pointes jusqu'à 100.
+    # Au-delà : 429 Too Many Requests, renvoyé par la gateway sans atteindre le service.
+    rate-limit:
+      rateLimit:
+        average: 50
+        period: 1s
+        burst: 100
+
   routers:
     stock:
       rule: "PathPrefix(`/v1/stock`) || PathPrefix(`/v1/warehouses`) || PathPrefix(`/v1/shipments`)"
       entryPoints: [web]
+      middlewares: [rate-limit]
       service: stock
 
     catalog:
       rule: "PathPrefix(`/v1/catalog`)"
       entryPoints: [web]
+      middlewares: [rate-limit]
       service: catalog
 
   services:
