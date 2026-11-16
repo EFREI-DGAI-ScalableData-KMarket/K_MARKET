@@ -63,6 +63,8 @@ def publish_batch(conn, producer) -> int:
         producer.produce(r["topic"], key=r["event_key"], value=json.dumps(r["payload"]), on_delivery=on_delivery)
     remaining = producer.flush(10)
     if remaining or failures:
+        producer.purge()        
+        producer.flush(0)
         raise KafkaException(f"{remaining} message(s) non confirmé(s), erreurs : {failures[:3]}")
 
     conn.execute("UPDATE inventory.outbox SET published_at = now() WHERE id = ANY(%s)", ([r["id"] for r in rows],))

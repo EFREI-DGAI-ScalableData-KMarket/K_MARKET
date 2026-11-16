@@ -1,4 +1,4 @@
-.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio
+.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock 
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
@@ -95,3 +95,5 @@ test-catalog: .env   ## Tests d'intégration du service Catalogue (pile lancée 
 kafka-tail:      ## Événements Kafka en direct (make kafka-tail TOPIC=inventory.shipment-status-changed)
 	docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
 	  --topic $(or $(TOPIC),inventory.stock-changed) --from-beginning --property print.key=true
+traffic: .env    ## Trafic de démo vers la gateway (make traffic DURATION=300 RPS=10)
+	@set -a && . ./.env && set +a && python scripts/traffic.py --duration $(or $(DURATION),120) --rps $(or $(RPS),10)
