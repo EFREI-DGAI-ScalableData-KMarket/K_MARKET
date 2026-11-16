@@ -4,15 +4,15 @@ Ce document explique **pourquoi** les données sont organisées ainsi. Le détai
 
 | Partie | Script |
 |---|---|
-| Schémas | [`db/postgres/01_schemas.sql`](../db/postgres/01_schemas.sql) |
-| `orders` (service Commandes) | [`db/postgres/02_orders.sql`](../db/postgres/02_orders.sql) |
-| `inventory` (service Stock) | [`db/postgres/03_inventory.sql`](../db/postgres/03_inventory.sql) |
-| `payments` (service Paiement) | [`db/postgres/04_payments.sql`](../db/postgres/04_payments.sql) |
-| `auth` (service Auth) | [`db/postgres/05_auth.sql`](../db/postgres/05_auth.sql) |
-| Partitions | [`db/postgres/06_partitions.sql`](../db/postgres/06_partitions.sql) |
-| Index | [`db/postgres/07_indexes.sql`](../db/postgres/07_indexes.sql) |
-| Rôles PostgreSQL | [`db/postgres/08_roles.sh`](../db/postgres/08_roles.sh) |
-| `catalog` (service Catalogue, MongoDB) | [`db/mongo/01_catalog.js`](../db/mongo/01_catalog.js) |
+| Schémas | [`db/postgres/01_schemas.sql`](../data/postgres/01_schemas.sql) |
+| `orders` (service Commandes) | [`db/postgres/02_orders.sql`](../data/postgres/02_orders.sql) |
+| `inventory` (service Stock) | [`db/postgres/03_inventory.sql`](../data/postgres/03_inventory.sql) |
+| `payments` (service Paiement) | [`db/postgres/04_payments.sql`](../data/postgres/04_payments.sql) |
+| `auth` (service Auth) | [`db/postgres/05_auth.sql`](../data/postgres/05_auth.sql) |
+| Partitions | [`db/postgres/06_partitions.sql`](../data/postgres/06_partitions.sql) |
+| Index | [`db/postgres/07_indexes.sql`](../data/postgres/07_indexes.sql) |
+| Rôles PostgreSQL | [`db/postgres/08_roles.sh`](../data/postgres/08_roles.sh) |
+| `catalog` (service Catalogue, MongoDB) | [`db/mongo/01_catalog.js`](../data/mongo/01_catalog.js) |
 
 Les décisions citées (D1 à D6) sont dans [`decisions.md`](decisions.md), les écarts au schéma du sujet dans l'[ADR-008](adr/008-ecarts-schema-reference.md).
 

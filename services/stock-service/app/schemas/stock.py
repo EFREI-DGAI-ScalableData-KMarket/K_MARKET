@@ -1,98 +1,101 @@
-from pydantic import BaseModel
+"""Schémas du service Stock — alignés sur contracts/inventory.openapi.yaml."""
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
-class StockByWarehouseResponse(BaseModel):
+from pydantic import BaseModel, Field
+
+ReservationStatus = Literal["reserved", "committed", "released"]
+ShipmentStatus = Literal["preparing", "shipped", "delivered"]
+WarehouseStatus = Literal["normal", "near_full"]
+
+
+#  Stock 
+class StockCreate(BaseModel):
     product_id: int
     warehouse_id: int
-    quantity: int
+    quantity: int = Field(ge=0)
 
-class StockTotalResponse(BaseModel):
+
+class StockItem(BaseModel):
+    product_id: int
+    warehouse_id: int
+    warehouse_name: str
+    quantity: int
+    updated_at: Optional[datetime] = None
+
+
+class StockSummary(BaseModel):
     product_id: int
     total_quantity: int
+    by_warehouse: list[StockItem]
 
+
+#  Réservations 
 class ReserveItem(BaseModel):
     product_id: int
-    quantity: int
+    quantity: int = Field(ge=1)
 
-class StockReserveRequest(BaseModel):
+
+class ReserveRequest(BaseModel):
     order_id: int
-    items: list[ReserveItem] 
+    items: list[ReserveItem] = Field(min_length=1)
 
 
-class StockReserveResponse(BaseModel):
-    reservation_id: int
+class OrderRef(BaseModel):
     order_id: int
-    product_id: int
-    warehouse_id: int  
-    quantity: int
-    status: str
-    message: str
 
-class StockItemDetail(BaseModel):
+
+class ReleaseRequest(BaseModel):
+    order_id: int
+    product_id: Optional[int] = None   # absent = toute la commande
+
+
+class Reservation(BaseModel):
+    id: int
+    order_id: int
     product_id: int
     warehouse_id: int
     quantity: int
+    status: ReservationStatus
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
-class StockDetailResponse(BaseModel):
-    product_id: int
-    total_quantity: int
-    by_warehouse: list[StockItemDetail]
 
-class StockCreateRequest(BaseModel):
-    product_id: int
-    warehouse_id: int
-    quantity: int
-
-class StockReleaseRequest(BaseModel):
+class ReservationResult(BaseModel):
     order_id: int
-    product_id: int
+    reservations: list[Reservation]
 
-class StockReleaseResponse(BaseModel):
-    order_id: int
-    product_id: int
-    status: str
-    message: str
 
-class StockItemDetail(BaseModel):
-    product_id: int
-    warehouse_id: int
-    quantity: int
-
-class StockDetailResponse(BaseModel):
-    product_id: int
-    total_quantity: int
-    by_warehouse: list[StockItemDetail]
-
-class StockCreateRequest(BaseModel):
-    product_id: int
-    warehouse_id: int
-    quantity: int
-    
-
-class WarehouseResponse(BaseModel):
+#  Entrepôts 
+class Warehouse(BaseModel):
     id: int
     name: str
     capacity_units: int
     used_units: int
     fill_rate: float
-    status: str  # "normal" ou "near_full"
-
-class WarehouseListResponse(BaseModel):
-    warehouses: list[WarehouseResponse]
+    status: WarehouseStatus
 
 
-class ShipmentResponse(BaseModel):
+#  Expéditions 
+class ShipmentCreate(BaseModel):
+    order_id: int
+    warehouse_id: int
+
+
+class ShipmentStatusUpdate(BaseModel):
+    status: ShipmentStatus
+
+
+class Shipment(BaseModel):
     id: int
     order_id: int
     warehouse_id: int
-    status: str
+    status: ShipmentStatus
     created_at: datetime
     shipped_at: Optional[datetime] = None
     delivered_at: Optional[datetime] = None
 
-class ShipmentCreateRequest(BaseModel):
-    warehouse_id: int
 
-class ShipmentStatusUpdateRequest(BaseModel):
-    status: str  # "preparing", "shipped", "delivered"
+class ShipmentPage(BaseModel):
+    items: list[Shipment]
+    total: int

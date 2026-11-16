@@ -73,10 +73,17 @@ share-minio:     ## Partage MinIO sur Internet via tunnel SSH, sans VPN (make sh
 	./scripts/share-minio.sh $(MODE)
 
 explain:         ## Démo EXPLAIN avant/après index (après make reseed ORDERS=500000)
-	docker compose exec -T postgres psql -U postgres -d kmarket -X < db/demo/explain.sql
+	docker compose exec -T postgres psql -U postgres -d kmarket -X < data/demo/explain.sql
 
 backup:          ## Sauvegarde PostgreSQL + MongoDB dans backups/
 	./scripts/backup.sh
 
 restore-test:    ## Restaure la dernière sauvegarde dans des bases de test et compare
 	./scripts/restore-test.sh
+
+fix-net:         ## Codespace : autorise le trafic entre conteneurs (règle iptables-legacy)
+	sudo iptables-legacy -C FORWARD -i br-+ -o br-+ -j ACCEPT 2>/dev/null || \
+	sudo iptables-legacy -I FORWARD -i br-+ -o br-+ -j ACCEPT
+
+test-stock: .env   ## Tests d'intégration du service Stock (pile lancée + seed requis)
+	@set -a && . ./.env && set +a && python -m pytest services/stock-service/tests -v -p no:cacheprovider

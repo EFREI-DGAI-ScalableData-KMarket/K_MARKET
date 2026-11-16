@@ -1,89 +1,80 @@
-from fastapi import APIRouter, HTTPException
+"""Routes du service Stock — contrat : contracts/inventory.openapi.yaml (monté sous /v1)."""
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
+
+from app.core.security import require_roles
 from app.repositories.stock import StockRepository
-from app.schemas.stock import StockByWarehouseResponse, StockTotalResponse
-from app.schemas.stock import StockReserveRequest, StockReserveResponse
-from app.schemas.stock import StockReleaseRequest, StockReleaseResponse
-from app.schemas.stock import WarehouseListResponse
-from app.schemas.stock import ShipmentResponse, ShipmentCreateRequest, ShipmentStatusUpdateRequest
-from app.schemas.stock import StockDetailResponse, StockCreateRequest
+from app.schemas.stock import (
+    OrderRef, ReleaseRequest, ReservationResult, ReserveRequest,
+    Shipment, ShipmentCreate, ShipmentPage, ShipmentStatus, ShipmentStatusUpdate,
+    StockCreate, StockItem, StockSummary, Warehouse,
+)
+
 router = APIRouter()
 repo = StockRepository()
 
-@router.get("/")
-def get_stock_status():
-    return {"message": "Stock service opérationnel"}
-
-@router.get("/{product_id}/warehouses/{warehouse_id}", response_model=StockByWarehouseResponse)
-def get_stock_by_warehouse(product_id: int, warehouse_id: int):
-    stock = repo.get_stock_by_warehouse(product_id, warehouse_id)
-    if not stock:
-        raise HTTPException(status_code=404, detail="Aucun stock trouvé pour ce produit dans cet entrepôt")
-    return stock
+# Rôles par usage (voir la description de chaque route dans le contrat)
+SERVICE = Depends(require_roles("service_account", "admin"))               # Saga, catalogue
+READ = Depends(require_roles("service_account", "logistics", "admin"))     # lecture du stock
+LOGISTICS = Depends(require_roles("logistics", "admin"))                   # entrepôts, expéditions
 
 
-@router.get("/{product_id}", response_model=StockDetailResponse)
-def get_stock_detail(product_id: int):
-    return repo.get_stock_detail(product_id)
-
-@router.post("", status_code=201)
-def create_stock(request: StockCreateRequest):
-    try:
-        return repo.create_initial_stock(request.product_id, request.warehouse_id, request.quantity)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-
-@router.post("/reserve")
-def reserve_stock(request: StockReserveRequest):
-    try:
-        items_dict = [{"product_id": i.product_id, "quantity": i.quantity} for i in request.items]
-        results = repo.reserve_stock(request.order_id, items_dict)
-        
-        unique_results = []
-        seen = set()
-        for r in results:
-            if r["reservation_id"] not in seen:
-                unique_results.append(r)
-                seen.add(r["reservation_id"])
-                
-        return {"message": "Réservation traitée", "details": unique_results}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# - STOCK
+@router.post("/stock", status_code=201, response_model=StockItem, dependencies=[SERVICE])
+def create_stock(body: StockCreate):
+    return repo.create_initial_stock(body.product_id, body.warehouse_id, body.quantity)
 
 
-# Route 4 : Libérer du stock réservé pour une commande
-@router.post("/release", response_model=StockReleaseResponse)
-def release_stock(request: StockReleaseRequest):
-    result = repo.release_stock(request.order_id, request.product_id)
-    return StockReleaseResponse(
-        order_id=request.order_id,
-        product_id=request.product_id,
-        status=result["status"],
-        message=result["message"]
-    )
+@router.get("/stock/{product_id}", response_model=StockSummary, dependencies=[READ])
+def get_stock(product_id: int):
+    return repo.get_stock_summary(product_id)
 
 
+@router.get("/stock/{product_id}/warehouses/{warehouse_id}", response_model=StockItem, dependencies=[READ])
+def get_stock_in_warehouse(product_id: int, warehouse_id: int):
+    return repo.get_stock_item(product_id, warehouse_id)
 
-@router.get("/warehouses", response_model=WarehouseListResponse)
+
+# - RÉSERVATIONS (Saga)
+@router.post("/stock/reserve", status_code=201, response_model=ReservationResult, dependencies=[SERVICE])
+def reserve_stock(body: ReserveRequest):
+    items = [(i.product_id, i.quantity) for i in body.items]
+    return {"order_id": body.order_id, "reservations": repo.reserve_stock(body.order_id, items)}
+
+
+@router.post("/stock/commit", response_model=ReservationResult, dependencies=[SERVICE])
+def commit_stock(body: OrderRef):
+    return {"order_id": body.order_id, "reservations": repo.commit_reservations(body.order_id)}
+
+
+@router.post("/stock/release", response_model=ReservationResult, dependencies=[SERVICE])
+def release_stock(body: ReleaseRequest):
+    return {"order_id": body.order_id, "reservations": repo.release_stock(body.order_id, body.product_id)}
+
+
+# - ENTREPÔTS
+@router.get("/warehouses", response_model=list[Warehouse], dependencies=[LOGISTICS])
 def get_warehouses():
-    return {"warehouses": repo.get_warehouses()}
+    return repo.get_warehouses()
 
 
+# - EXPÉDITIONS
+@router.get("/shipments", response_model=ShipmentPage, dependencies=[LOGISTICS])
+def get_shipments(
+    warehouse_id: Optional[int] = None,
+    status: Optional[ShipmentStatus] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    return repo.get_shipments(warehouse_id, status, limit, offset)
 
 
-@router.get("/shipments", response_model=list[ShipmentResponse])
-def get_shipments(warehouse_id: int = None, status: str = None):
-    return repo.get_shipments(warehouse_id, status)
+@router.post("/shipments", status_code=201, response_model=Shipment, dependencies=[LOGISTICS])
+def create_shipment(body: ShipmentCreate):
+    return repo.create_shipment(body.order_id, body.warehouse_id)
 
-@router.post("/shipments/{order_id}", response_model=ShipmentResponse)
-def create_shipment(order_id: int, request: ShipmentCreateRequest):
-    try:
-        return repo.create_shipment(order_id, request.warehouse_id)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
 
-@router.patch("/shipments/{shipment_id}/status")
-def update_shipment_status(shipment_id: int, request: ShipmentStatusUpdateRequest):
-    success = repo.update_shipment_status(shipment_id, request.status)
-    if not success:
-        raise HTTPException(status_code=404, detail="Expédition introuvable")
-    return {"message": f"Statut mis à jour vers {request.status}"}
+@router.patch("/shipments/{shipment_id}/status", response_model=Shipment, dependencies=[LOGISTICS])
+def update_shipment_status(shipment_id: int, body: ShipmentStatusUpdate):
+    return repo.update_shipment_status(shipment_id, body.status)

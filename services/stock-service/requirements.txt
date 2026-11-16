@@ -6,3 +6,4 @@ psycopg[binary]
 httpx
 pyjwt
 pytest
+PyJWT

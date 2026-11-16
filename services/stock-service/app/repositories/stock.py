@@ -1,196 +1,237 @@
+"""Accès PostgreSQL (schéma inventory) du service Stock.
+
+Chaque méthode ouvre une connexion ; `with psycopg.connect(...)` valide la transaction
+en sortie de bloc, et l'annule si une exception est levée (tout ou rien).
+"""
 import psycopg
+from psycopg import errors
+from psycopg.rows import dict_row
+
 from app.core.config import settings
-from app.schemas.stock import StockByWarehouseResponse, StockTotalResponse
+
+
+class NotFound(Exception):
+    """-> 404"""
+
+
+class Conflict(Exception):
+    """-> 409"""
+
+
+class InsufficientStock(Exception):
+    """-> 422, avec le détail par produit."""
+
+    def __init__(self, details: list[dict]):
+        super().__init__("Stock insuffisant")
+        self.details = details
+
+
+RESERVATION_COLS = "id, order_id, product_id, warehouse_id, quantity, status, created_at, updated_at"
+SHIPMENT_COLS = "id, order_id, warehouse_id, status, created_at, shipped_at, delivered_at"
+NEXT_SHIPMENT_STATUS = {"preparing": "shipped", "shipped": "delivered"}
+
+STOCK_ITEM_SQL = """
+    SELECT s.product_id, s.warehouse_id, w.name AS warehouse_name, s.quantity, s.updated_at
+    FROM inventory.stock s
+    JOIN inventory.warehouses w ON w.id = s.warehouse_id
+    WHERE s.product_id = %s
+"""
+
+# Décrémente l'entrepôt le mieux pourvu, en une seule requête.
+# La condition `s.quantity >= q` est réévaluée si une autre transaction a modifié la ligne
+# entre-temps (READ COMMITTED) : pas de survente, et 0 ligne renvoyée si le stock a disparu.
+RESERVE_SQL = """
+    UPDATE inventory.stock s
+    SET quantity = s.quantity - %(q)s, updated_at = now()
+    WHERE s.product_id = %(p)s
+      AND s.quantity >= %(q)s
+      AND s.warehouse_id = (
+          SELECT warehouse_id FROM inventory.stock
+          WHERE product_id = %(p)s AND quantity >= %(q)s
+          ORDER BY quantity DESC, warehouse_id
+          LIMIT 1
+      )
+    RETURNING s.warehouse_id
+"""
+
 
 class StockRepository:
     def __init__(self):
-        self.dsn = f"postgresql://{settings.postgres_user}:{settings.postgres_password}@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+        self.dsn = (
+            f"postgresql://{settings.postgres_user}:{settings.postgres_password}"
+            f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+        )
 
-    def get_stock_by_warehouse(self, product_id: int, warehouse_id: int) -> StockByWarehouseResponse | None:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT product_id, warehouse_id, quantity FROM inventory.stock WHERE product_id = %s AND warehouse_id = %s",
-                    (product_id, warehouse_id)
-                )
-                row = cur.fetchone()
-                if row:
-                    return StockByWarehouseResponse(product_id=row[0], warehouse_id=row[1], quantity=row[2])
-                return None
+    def _connect(self):
+        return psycopg.connect(self.dsn, row_factory=dict_row)
 
-    def get_total_stock(self, product_id: int) -> StockTotalResponse:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COALESCE(SUM(quantity), 0) FROM inventory.stock WHERE product_id = %s",
-                    (product_id,)
-                )
-                total = cur.fetchone()[0]
-                return StockTotalResponse(product_id=product_id, total_quantity=total)
+    #  STOCK
+    def get_stock_summary(self, product_id: int) -> dict:
+        with self._connect() as conn:
+            rows = conn.execute(STOCK_ITEM_SQL + " ORDER BY s.warehouse_id", (product_id,)).fetchall()
+        if not rows:
+            raise NotFound(f"Aucun stock pour le produit {product_id}")
+        return {"product_id": product_id,
+                "total_quantity": sum(r["quantity"] for r in rows),
+                "by_warehouse": rows}
 
-    def find_best_warehouse(self, product_id: int, quantity: int) -> int | None:
-        """Trouve l'entrepôt qui a le plus de stock pour ce produit."""
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT warehouse_id FROM inventory.stock "
-                    "WHERE product_id = %s AND quantity >= %s "
-                    "ORDER BY quantity DESC LIMIT 1",
-                    (product_id, quantity)
-                )
-                row = cur.fetchone()
-                return row[0] if row else None
-
-    def reserve_stock(self, order_id: int, items: list[dict]) -> list[dict]:
-        results = []
-        merged_items = {}
-        for item in items:
-            pid = item["product_id"]
-            merged_items[pid] = merged_items.get(pid, 0) + item["quantity"]
-
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                for pid, qty in merged_items.items():
-                    # pid, qty = item["product_id"], item["quantity"]
-                    
-                    cur.execute("SELECT id, status, warehouse_id FROM inventory.reservations WHERE order_id=%s AND product_id=%s", (order_id, pid))
-                    existing = cur.fetchone()
-                    if existing:
-                        results.append({"reservation_id": existing[0], "status": existing[1], "warehouse_id": existing[2], "message": "Déjà réservé"})
-                        continue
-                    
-                    cur.execute("SELECT warehouse_id FROM inventory.stock WHERE product_id=%s AND quantity >= %s ORDER BY quantity DESC LIMIT 1", (pid, qty))
-                    wh_row = cur.fetchone()
-                    if not wh_row:
-                        raise ValueError(f"Stock insuffisant pour le produit {pid}")
-                    wid = wh_row[0]
-                    
-                    cur.execute("UPDATE inventory.stock SET quantity = quantity - %s WHERE product_id=%s AND warehouse_id=%s", (qty, pid, wid))
-                    cur.execute("INSERT INTO inventory.reservations (order_id, product_id, warehouse_id, quantity, status) VALUES (%s, %s, %s, %s, 'reserved') RETURNING id", (order_id, pid, wid, qty))
-                    res_id = cur.fetchone()[0]
-                    
-                    results.append({"reservation_id": res_id, "status": "reserved", "warehouse_id": wid, "message": "Réservé"})
-        return results
-            
-    def release_stock(self, order_id: int, product_id: int) -> dict:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, warehouse_id, quantity, status FROM inventory.reservations "
-                    "WHERE order_id = %s AND product_id = %s FOR UPDATE",
-                    (order_id, product_id)
-                )
-                res = cur.fetchone()
-                
-                if not res:
-                    return {"status": "not_found", "message": "Aucune réservation trouvée"}
-                
-                res_id, warehouse_id, quantity, status = res
-                
-                if status == "released":
-                    return {"status": "released", "message": "Déjà libéré (idempotent)"}
-                
-
-                cur.execute(
-                    "UPDATE inventory.stock SET quantity = quantity + %s, updated_at = NOW() "
-                    "WHERE product_id = %s AND warehouse_id = %s",
-                    (quantity, product_id, warehouse_id)
-                )
-                
-                cur.execute(
-                    "UPDATE inventory.reservations SET status = 'released', updated_at = NOW() "
-                    "WHERE id = %s",
-                    (res_id,)
-                )
-                
-                return {"status": "released", "message": "Stock libéré avec succès"}
-
-
-    def get_warehouses(self) -> list[dict]:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT w.id, w.name, w.capacity_units, COALESCE(SUM(s.quantity), 0) as used
-                    FROM inventory.warehouses w
-                    LEFT JOIN inventory.stock s ON w.id = s.warehouse_id
-                    GROUP BY w.id, w.name, w.capacity_units
-                    ORDER BY w.id
-                """)
-                rows = cur.fetchall()
-                results = []
-                for row in rows:
-                    wid, name, capacity, used = row
-                    fill_rate = used / capacity if capacity > 0 else 0.0
-                    status = "near_full" if fill_rate > 0.90 else "normal"
-                    results.append({
-                        "id": wid, "name": name, "capacity_units": capacity,
-                        "used_units": used, "fill_rate": round(fill_rate, 2), "status": status
-                    })
-                return results
-
-    def get_shipments(self, warehouse_id: int | None = None, status: str | None = None) -> list[dict]:
-        query = "SELECT id, order_id, warehouse_id, status, created_at, shipped_at, delivered_at FROM inventory.shipments WHERE 1=1"
-        params = []
-        if warehouse_id:
-            query += " AND warehouse_id = %s"
-            params.append(warehouse_id)
-        if status:
-            query += " AND status = %s"
-            params.append(status)
-        query += " ORDER BY created_at DESC"
-
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, tuple(params))
-                return [{"id": r[0], "order_id": r[1], "warehouse_id": r[2], "status": r[3], 
-                         "created_at": r[4], "shipped_at": r[5], "delivered_at": r[6]} for r in cur.fetchall()]
-
-    def create_shipment(self, order_id: int, warehouse_id: int) -> dict:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                # On vérifie d'abord si une expédition existe déjà pour cette commande
-                cur.execute("SELECT id FROM inventory.shipments WHERE order_id = %s", (order_id,))
-                if cur.fetchone():
-                    raise ValueError("Une expédition existe déjà pour cette commande")
-
-                cur.execute(
-                    "INSERT INTO inventory.shipments (order_id, warehouse_id, status) VALUES (%s, %s, 'preparing') RETURNING id, created_at",
-                    (order_id, warehouse_id)
-                )
-                row = cur.fetchone()
-                return {"id": row[0], "order_id": order_id, "warehouse_id": warehouse_id, "status": "preparing", "created_at": row[1]}
-    
-    def update_shipment_status(self, shipment_id: int, status: str) -> bool:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                if status == "shipped":
-                    # On ne met la date que si elle n'existe pas déjà
-                    cur.execute("UPDATE inventory.shipments SET status=%s, shipped_at=COALESCE(shipped_at, NOW()) WHERE id=%s", (status, shipment_id))
-                elif status == "delivered":
-                    cur.execute("UPDATE inventory.shipments SET status=%s, delivered_at=COALESCE(delivered_at, NOW()) WHERE id=%s", (status, shipment_id))
-                else:
-                    cur.execute("UPDATE inventory.shipments SET status=%s WHERE id=%s", (status, shipment_id))
-                return cur.rowcount > 0
-
-    def get_stock_detail(self, product_id: int) -> dict:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT warehouse_id, quantity FROM inventory.stock WHERE product_id = %s", (product_id,))
-                rows = cur.fetchall()
-                total = sum(r[1] for r in rows)
-                details = [{"product_id": product_id, "warehouse_id": r[0], "quantity": r[1]} for r in rows]
-                return {"product_id": product_id, "total_quantity": total, "by_warehouse": details}
+    def get_stock_item(self, product_id: int, warehouse_id: int) -> dict:
+        with self._connect() as conn:
+            row = conn.execute(STOCK_ITEM_SQL + " AND s.warehouse_id = %s",
+                               (product_id, warehouse_id)).fetchone()
+        if not row:
+            raise NotFound("Aucun stock pour ce produit dans cet entrepôt")
+        return row
 
     def create_initial_stock(self, product_id: int, warehouse_id: int, quantity: int) -> dict:
-        with psycopg.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                # Vérifier si existe déjà
-                cur.execute("SELECT id FROM inventory.stock WHERE product_id = %s AND warehouse_id = %s", (product_id, warehouse_id))
-                if cur.fetchone():
-                    raise ValueError("Stock déjà existant pour ce produit dans cet entrepôt")
-                
-                cur.execute(
-                    "INSERT INTO inventory.stock (product_id, warehouse_id, quantity) VALUES (%s, %s, %s)",
-                    (product_id, warehouse_id, quantity)
-                )
-                return {"product_id": product_id, "warehouse_id": warehouse_id, "quantity": quantity}
+        with self._connect() as conn:
+            if not conn.execute("SELECT 1 FROM inventory.warehouses WHERE id = %s", (warehouse_id,)).fetchone():
+                raise NotFound(f"Entrepôt {warehouse_id} introuvable")
+            if conn.execute("SELECT 1 FROM inventory.stock WHERE product_id = %s AND warehouse_id = %s",
+                            (product_id, warehouse_id)).fetchone():
+                raise Conflict("Stock déjà existant pour ce produit dans cet entrepôt")
+            try:
+                conn.execute("INSERT INTO inventory.stock (product_id, warehouse_id, quantity, updated_at) "
+                             "VALUES (%s, %s, %s, now())", (product_id, warehouse_id, quantity))
+            except errors.UniqueViolation:   # création simultanée
+                raise Conflict("Stock déjà existant pour ce produit dans cet entrepôt")
+        return self.get_stock_item(product_id, warehouse_id)
+
+    #  RÉSERVATIONS (Saga)
+    def _reservations(self, conn, order_id: int, product_id: int | None = None, lock: bool = False) -> list[dict]:
+        sql = f"SELECT {RESERVATION_COLS} FROM inventory.reservations WHERE order_id = %s"
+        params = [order_id]
+        if product_id is not None:
+            sql += " AND product_id = %s"
+            params.append(product_id)
+        sql += " ORDER BY id" + (" FOR UPDATE" if lock else "")
+        return conn.execute(sql, params).fetchall()
+
+    def reserve_stock(self, order_id: int, items: list[tuple[int, int]]) -> list[dict]:
+        """Tout ou rien. Rejeu pour une commande déjà réservée : renvoie l'existant sans rien décrémenter."""
+        wanted: dict[int, int] = {}
+        for product_id, quantity in items:                 # même produit sur deux lignes -> une seule réservation
+            wanted[product_id] = wanted.get(product_id, 0) + quantity
+
+        try:
+            with self._connect() as conn:
+                existing = self._reservations(conn, order_id)
+                if existing:
+                    return existing
+
+                missing = []
+                for product_id, quantity in wanted.items():
+                    row, available = None, 0
+                    for _ in range(3):   # une réservation concurrente peut « voler » l'entrepôt choisi : on réessaie
+                        row = conn.execute(RESERVE_SQL, {"p": product_id, "q": quantity}).fetchone()
+                        if row:
+                            break
+                        available = conn.execute(
+                            "SELECT COALESCE(MAX(quantity), 0) AS a FROM inventory.stock WHERE product_id = %s",
+                            (product_id,)).fetchone()["a"]
+                        if available < quantity:   # plus aucun entrepôt ne peut servir la ligne
+                            break
+                    if row is None:
+                        missing.append({"product_id": product_id, "requested": quantity, "available": available})
+                        continue
+                    conn.execute(
+                        "INSERT INTO inventory.reservations "
+                        "(order_id, product_id, warehouse_id, quantity, status, created_at, updated_at) "
+                        "VALUES (%s, %s, %s, %s, 'reserved', now(), now())",
+                        (order_id, product_id, row["warehouse_id"], quantity))
+
+                if missing:
+                    raise InsufficientStock(missing)       # annule toute la transaction
+                return self._reservations(conn, order_id)
+        except errors.UniqueViolation:
+            # Deux /reserve simultanés pour la même commande : l'autre a gagné, on renvoie son résultat.
+            with self._connect() as conn:
+                return self._reservations(conn, order_id)
+
+    def commit_reservations(self, order_id: int) -> list[dict]:
+        with self._connect() as conn:
+            rows = self._reservations(conn, order_id, lock=True)
+            if not rows:
+                raise NotFound(f"Aucune réservation pour la commande {order_id}")
+            if any(r["status"] == "released" for r in rows):
+                raise Conflict("Réservations déjà libérées : impossible de confirmer")
+            conn.execute("UPDATE inventory.reservations SET status = 'committed', updated_at = now() "
+                         "WHERE order_id = %s AND status = 'reserved'", (order_id,))
+            return self._reservations(conn, order_id)
+
+    def release_stock(self, order_id: int, product_id: int | None = None) -> list[dict]:
+        with self._connect() as conn:
+            rows = self._reservations(conn, order_id, product_id, lock=True)
+            if not rows:
+                raise NotFound(f"Aucune réservation pour la commande {order_id}")
+            to_release = [r for r in rows if r["status"] != "released"]   # idempotent
+            for r in to_release:
+                conn.execute("UPDATE inventory.stock SET quantity = quantity + %s, updated_at = now() "
+                             "WHERE product_id = %s AND warehouse_id = %s",
+                             (r["quantity"], r["product_id"], r["warehouse_id"]))
+            if to_release:
+                conn.execute("UPDATE inventory.reservations SET status = 'released', updated_at = now() "
+                             "WHERE id = ANY(%s)", ([r["id"] for r in to_release],))
+            return self._reservations(conn, order_id, product_id)
+
+    #  ENTREPÔTS
+    def get_warehouses(self) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute("""
+                SELECT w.id, w.name, w.capacity_units, COALESCE(SUM(s.quantity), 0)::int AS used_units
+                FROM inventory.warehouses w
+                LEFT JOIN inventory.stock s ON s.warehouse_id = w.id
+                GROUP BY w.id
+                ORDER BY w.id
+            """).fetchall()
+        for r in rows:
+            fill = r["used_units"] / r["capacity_units"] if r["capacity_units"] else 0.0
+            r["fill_rate"] = round(fill, 4)
+            r["status"] = "near_full" if fill > 0.90 else "normal"
+        return rows
+
+    #  EXPÉDITIONS
+    def get_shipments(self, warehouse_id: int | None, status: str | None, limit: int, offset: int) -> dict:
+        where, params = [], []
+        if warehouse_id is not None:
+            where.append("warehouse_id = %s")
+            params.append(warehouse_id)
+        if status is not None:
+            where.append("status = %s")
+            params.append(status)
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._connect() as conn:
+            total = conn.execute(f"SELECT count(*) AS n FROM inventory.shipments{clause}", params).fetchone()["n"]
+            items = conn.execute(
+                f"SELECT {SHIPMENT_COLS} FROM inventory.shipments{clause} "
+                "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s", [*params, limit, offset]).fetchall()
+        return {"items": items, "total": total}
+
+    def create_shipment(self, order_id: int, warehouse_id: int) -> dict:
+        with self._connect() as conn:
+            if not conn.execute("SELECT 1 FROM inventory.warehouses WHERE id = %s", (warehouse_id,)).fetchone():
+                raise NotFound(f"Entrepôt {warehouse_id} introuvable")
+            if conn.execute("SELECT 1 FROM inventory.shipments WHERE order_id = %s", (order_id,)).fetchone():
+                raise Conflict("Une expédition existe déjà pour cette commande")
+            try:
+                return conn.execute(
+                    f"INSERT INTO inventory.shipments (order_id, warehouse_id, status, created_at) "
+                    f"VALUES (%s, %s, 'preparing', now()) RETURNING {SHIPMENT_COLS}",
+                    (order_id, warehouse_id)).fetchone()
+            except errors.UniqueViolation:
+                raise Conflict("Une expédition existe déjà pour cette commande")
+
+    def update_shipment_status(self, shipment_id: int, new_status: str) -> dict:
+        with self._connect() as conn:
+            current = conn.execute(f"SELECT {SHIPMENT_COLS} FROM inventory.shipments WHERE id = %s FOR UPDATE",
+                                   (shipment_id,)).fetchone()
+            if not current:
+                raise NotFound(f"Expédition {shipment_id} introuvable")
+            if current["status"] == new_status:          # rejeu : rien à faire
+                return current
+            if NEXT_SHIPMENT_STATUS.get(current["status"]) != new_status:
+                raise Conflict(f"Transition interdite : {current['status']} -> {new_status}")
+            ts_column = "shipped_at" if new_status == "shipped" else "delivered_at"
+            return conn.execute(
+                f"UPDATE inventory.shipments SET status = %s, {ts_column} = now() "
+                f"WHERE id = %s RETURNING {SHIPMENT_COLS}", (new_status, shipment_id)).fetchone()
