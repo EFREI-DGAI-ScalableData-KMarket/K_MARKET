@@ -4,3 +4,5 @@ strawberry-graphql[fastapi]
 pymongo
 pydantic-settings
 pytest
+PyJWT
+httpx

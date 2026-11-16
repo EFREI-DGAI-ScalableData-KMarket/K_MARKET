@@ -54,7 +54,7 @@ Il ne reste qu’un trou chacune (C1.2 pour toi, C1.3 pour Emmy), que les ADR cr
 
 ## Ordre de travail
 
-1. Fusion de `feat/db-init` (en cours).
+1. Fusion de `feat/data-init` (en cours).
 2. Volet 1 terminé : EXPLAIN avant/après, sauvegarde et restauration testées, ADR 001 à 003.
 3. Contrats ensemble : `orders`, `inventory`, `payments`, `auth` (OpenAPI), `catalog` (GraphQL).
 4. Tranche verticale : `POST /v1/orders`, saga Stock/Paiement, événement Kafka, compteur Spark, affichage dans l'onglet 1.

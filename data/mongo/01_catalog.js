@@ -46,7 +46,7 @@ dbm.createCollection("catalog", {
         }),
         byCategory("Drama", ["serie", "support"], {
           serie: str, saison: int(1), episodes: int(1),
-          support: { enum: ["DVD", "Blu-ray", "Coffret", "Artbook"] }, sous_titres: strArray
+          support: { enum: ["DVD", "Blu_ray", "Coffret", "Artbook"] }, sous_titres: strArray
         }),
         byCategory("Livre", ["isbn", "langue"], {
           isbn: { bsonType: "string", pattern: "^97[89][0-9]{10}$" },

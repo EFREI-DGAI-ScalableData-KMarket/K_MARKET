@@ -69,3 +69,39 @@ docker run --rm --network k_market_default \
   -e CATALOG_API_KEY="aec79dceffd40f577e2ec30459be4390" \
   -e STREAM_CONSUMER_API_KEY="5a9ab4d53d8cd8d3023503b075cda7a4" \
   k_market-seed --reset --orders 1000
+
+
+
+
+SELECT product_id, warehouse_id, quantity FROM inventory.stock ORDER BY quantity DESC LIMIT 5;
+ product_id | warehouse_id | quantity 
+------------+--------------+----------
+        253 |            1 |      174
+         25 |            1 |      173
+        281 |            1 |      173
+        117 |            1 |      172
+        226 |            1 |      172
+(5 rows)
+SELECT order_id, count(*) FROM inventory.reservations WHERE status = 'reserved' GROUP BY order_id LIMIT 5;
+ order_id | count 
+----------+-------
+(0 rows)
+SELECT id, order_id, status FROM inventory.shipments WHERE status = 'preparing' LIMIT 5;
+  id   | order_id |  status   
+-------+----------+-----------
+ 17833 |    19678 | preparing
+ 17834 |    19679 | preparing
+ 17841 |    19686 | preparing
+ 17842 |    19687 | preparing
+ 17848 |    19695 | preparing
+(5 rows)
+
+
+ SELECT id, order_id, product_id, warehouse_id, quantity, status
+FROM inventory.reservations WHERE order_id = 2;
+ id | order_id | product_id | warehouse_id | quantity |  status   
+----+----------+------------+--------------+----------+-----------
+  2 |        2 |         15 |            4 |        1 | committed
+  3 |        2 |         92 |            1 |        2 | committed
+  4 |        2 |        151 |            1 |        1 | committed
+(3 rows)

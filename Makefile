@@ -87,3 +87,7 @@ fix-net:         ## Codespace : autorise le trafic entre conteneurs (règle ipta
 
 test-stock: .env   ## Tests d'intégration du service Stock (pile lancée + seed requis)
 	@set -a && . ./.env && set +a && python -m pytest services/stock-service/tests -v -p no:cacheprovider
+
+
+test-catalog: .env   ## Tests d'intégration du service Catalogue (pile lancée + seed requis)
+	@set -a && . ./.env && set +a && python -m pytest services/catalog-service/tests -v -p no:cacheprovider

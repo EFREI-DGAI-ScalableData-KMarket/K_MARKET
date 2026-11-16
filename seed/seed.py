@@ -65,7 +65,7 @@ DRAMAS = [
     ("Hanok Diaries", "tranche de vie"), ("Love in Gangnam", "romance"), ("Neon Detectives", "thriller"),
     ("Spring at Gyeongju", "romance"), ("The Idol Code", "comédie"), ("Winter Palace", "historique"),
 ]
-DRAMA_SUPPORTS = [("DVD", 2490, 3490), ("Blu-ray", 2990, 4490), ("Coffret", 5990, 8990), ("Artbook", 2490, 3990)]
+DRAMA_SUPPORTS = [("DVD", 2490, 3490), ("Blu_ray", 2990, 4490), ("Coffret", 5990, 8990), ("Artbook", 2490, 3990)]
 
 BEAUTY_BRANDS = ["Hanbit Skin", "Seoul Glow", "Jeju Dew", "Moonbeam Lab", "Bori Beauty", "Cherry Hanok"]
 BEAUTY_TYPES = [  # (type, contenances possibles en ml, prix min, prix max)
