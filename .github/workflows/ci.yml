@@ -43,7 +43,8 @@ jobs:
 
       - name: Attendre la fin du seed
         run: |
-          code=$(docker compose wait seed)
+          docker compose wait seed > /dev/null || true
+          code=$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq seed)")
           echo "seed terminé avec le code $code"
           test "$code" -eq 0
 
