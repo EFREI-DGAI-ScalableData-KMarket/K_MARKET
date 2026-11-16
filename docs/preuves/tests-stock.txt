@@ -2,28 +2,29 @@
 platform linux -- Python 3.14.2, pytest-9.2.0, pluggy-1.7.0 -- /workspaces/K_MARKET/.venv/bin/python
 rootdir: /workspaces/K_MARKET
 plugins: anyio-4.16.0, Faker-40.44.0
-collecting ... collected 21 items
+collecting ... collected 22 items
 
 services/stock-service/tests/test_stock_api.py::test_health_sans_jeton PASSED [  4%]
 services/stock-service/tests/test_stock_api.py::test_401_sans_jeton PASSED [  9%]
-services/stock-service/tests/test_stock_api.py::test_401_jeton_mal_signe PASSED [ 14%]
-services/stock-service/tests/test_stock_api.py::test_401_jeton_expire PASSED [ 19%]
-services/stock-service/tests/test_stock_api.py::test_403_role_insuffisant PASSED [ 23%]
-services/stock-service/tests/test_stock_api.py::test_warehouses PASSED   [ 28%]
-services/stock-service/tests/test_stock_api.py::test_stock_summary PASSED [ 33%]
-services/stock-service/tests/test_stock_api.py::test_stock_produit_inconnu PASSED [ 38%]
-services/stock-service/tests/test_stock_api.py::test_stock_par_entrepot PASSED [ 42%]
-services/stock-service/tests/test_stock_api.py::test_create_stock PASSED [ 47%]
-services/stock-service/tests/test_stock_api.py::test_create_stock_entrepot_inconnu PASSED [ 52%]
-services/stock-service/tests/test_stock_api.py::test_create_stock_corps_invalide PASSED [ 57%]
-services/stock-service/tests/test_stock_api.py::test_cycle_reserve_commit_release PASSED [ 61%]
-services/stock-service/tests/test_stock_api.py::test_release_une_ligne PASSED [ 66%]
-services/stock-service/tests/test_stock_api.py::test_reserve_stock_insuffisant_tout_ou_rien PASSED [ 71%]
-services/stock-service/tests/test_stock_api.py::test_reserve_corps_invalide PASSED [ 76%]
-services/stock-service/tests/test_stock_api.py::test_commit_release_commande_inconnue PASSED [ 80%]
-services/stock-service/tests/test_stock_api.py::test_reserve_concurrent_sans_survente PASSED [ 85%]
-services/stock-service/tests/test_stock_api.py::test_cycle_expedition PASSED [ 90%]
-services/stock-service/tests/test_stock_api.py::test_expedition_erreurs PASSED [ 95%]
-services/stock-service/tests/test_stock_api.py::test_liste_expeditions_filtre_et_pagination PASSED [100%]
+services/stock-service/tests/test_stock_api.py::test_401_jeton_mal_signe PASSED [ 13%]
+services/stock-service/tests/test_stock_api.py::test_401_jeton_expire PASSED [ 18%]
+services/stock-service/tests/test_stock_api.py::test_403_role_insuffisant PASSED [ 22%]
+services/stock-service/tests/test_stock_api.py::test_warehouses PASSED   [ 27%]
+services/stock-service/tests/test_stock_api.py::test_stock_summary PASSED [ 31%]
+services/stock-service/tests/test_stock_api.py::test_stock_produit_inconnu PASSED [ 36%]
+services/stock-service/tests/test_stock_api.py::test_stock_par_entrepot PASSED [ 40%]
+services/stock-service/tests/test_stock_api.py::test_create_stock PASSED [ 45%]
+services/stock-service/tests/test_stock_api.py::test_create_stock_entrepot_inconnu PASSED [ 50%]
+services/stock-service/tests/test_stock_api.py::test_create_stock_corps_invalide PASSED [ 54%]
+services/stock-service/tests/test_stock_api.py::test_cycle_reserve_commit_release PASSED [ 59%]
+services/stock-service/tests/test_stock_api.py::test_release_une_ligne PASSED [ 63%]
+services/stock-service/tests/test_stock_api.py::test_reserve_stock_insuffisant_tout_ou_rien PASSED [ 68%]
+services/stock-service/tests/test_stock_api.py::test_reserve_corps_invalide PASSED [ 72%]
+services/stock-service/tests/test_stock_api.py::test_commit_release_commande_inconnue PASSED [ 77%]
+services/stock-service/tests/test_stock_api.py::test_reserve_concurrent_sans_survente PASSED [ 81%]
+services/stock-service/tests/test_stock_api.py::test_cycle_expedition PASSED [ 86%]
+services/stock-service/tests/test_stock_api.py::test_expedition_erreurs PASSED [ 90%]
+services/stock-service/tests/test_stock_api.py::test_liste_expeditions_filtre_et_pagination PASSED [ 95%]
+services/stock-service/tests/test_stock_api.py::test_metriques_prometheus PASSED [100%]
 
-============================== 21 passed in 1.79s ==============================
+============================== 22 passed in 1.28s ==============================

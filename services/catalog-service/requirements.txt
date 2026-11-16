@@ -6,3 +6,4 @@ pydantic-settings
 pytest
 PyJWT
 httpx
+prometheus-fastapi-instrumentator

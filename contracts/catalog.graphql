@@ -7,6 +7,8 @@ Noms de champs en snake_case, comme les contrats REST.
 Authentification : en-tête `Authorization: Bearer <JWT>` (émis par auth-api, claim `roles`).
 - Lecture (Query) : tout rôle authentifié (admin, catalog_manager, analyst, logistics, service_account)
 - Écriture (Mutation) : catalog_manager, admin
+Images : GET /v1/catalog/images/{product_id}.svg (hors GraphQL, sans jeton : une balise <img>
+n'en envoie pas). Visuel généré à partir du produit (catégorie, nom, prix) ; aucun fichier stocké.
 
 Erreurs : erreurs GraphQL standard ; `errors[].extensions.code` vaut une des valeurs de ErrorCode
 (la réponse HTTP reste 200, comme le veut GraphQL). Les détails éventuels sont dans
@@ -31,7 +33,7 @@ enum ErrorCode {
   UPSTREAM_ERROR
 }
 
-# ---------------------------------------------------------------- enums
+#  enums
 
 enum Category {
   Album
@@ -69,7 +71,7 @@ enum Langue {
   ko
 }
 
-# ---------------------------------------------------------------- attributs par catégorie
+#  attributs par catégorie
 # Champs non nuls = champs obligatoires du validator MongoDB pour la catégorie.
 
 type AlbumAttributes {
@@ -138,7 +140,7 @@ union ProductAttributes =
   | LivreAttributes
   | BeauteAttributes
 
-# ---------------------------------------------------------------- produit
+#  produit
 
 type Product {
   product_id: Int!
@@ -151,6 +153,8 @@ type Product {
   status: ProductStatus!
   "Date de dernière écriture (création ou mise à jour)"
   indexed_at: DateTime
+  "URL de l'image (visuel SVG généré si aucune image n'est fournie)"
+  image_url: String!
 }
 
 type ProductPage {
@@ -159,7 +163,7 @@ type ProductPage {
   has_more: Boolean!
 }
 
-# ---------------------------------------------------------------- inputs
+#  inputs
 
 "Tous les critères sont optionnels et se combinent (ET). Sans `status` : produits actifs et archivés."
 input ProductFilter {
@@ -196,7 +200,7 @@ input ProductUpdateInput {
   description: String
 }
 
-# ---------------------------------------------------------------- opérations
+#  opérations
 
 type Query {
   "Lister les produits (filtres + pagination ; tri par product_id, ou par pertinence avec `search`). limit : 1 à 200"

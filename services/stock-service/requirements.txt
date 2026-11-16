@@ -7,3 +7,4 @@ httpx
 pyjwt
 pytest
 PyJWT
+prometheus-fastapi-instrumentator

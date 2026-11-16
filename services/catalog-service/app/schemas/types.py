@@ -8,7 +8,7 @@ import strawberry
 from strawberry.scalars import JSON
 
 
-# ---------------------------------------------------------------- enums (valeurs = celles stockées dans MongoDB)
+#  enums (valeurs = celles stockées dans MongoDB)
 @strawberry.enum
 class Category(Enum):
     Album = "Album"
@@ -49,7 +49,7 @@ class Langue(Enum):
     ko = "ko"
 
 
-# ---------------------------------------------------------------- attributs par catégorie
+#  attributs par catégorie
 @strawberry.type
 class AlbumAttributes:
     artist: str
@@ -118,7 +118,7 @@ ATTRIBUTE_TYPES = {
 }
 
 
-# ---------------------------------------------------------------- produit
+#  produit
 @strawberry.type
 class Product:
     product_id: int
@@ -130,6 +130,7 @@ class Product:
     attributes: ProductAttributes
     status: ProductStatus
     indexed_at: Optional[datetime]
+    image_url: str = strawberry.field(description="URL de l'image (visuel SVG généré si aucune image n'est fournie)")
 
 
 @strawberry.type
@@ -139,7 +140,7 @@ class ProductPage:
     has_more: bool
 
 
-# ---------------------------------------------------------------- inputs
+#  inputs
 @strawberry.input
 class ProductFilter:
     category: Optional[Category] = None
@@ -175,7 +176,7 @@ class ProductUpdateInput:
     description: Optional[str] = strawberry.UNSET
 
 
-# ---------------------------------------------------------------- conversion document MongoDB -> types GraphQL
+#  conversion document MongoDB -> types GraphQL
 def _enum_of(hint) -> type[Enum] | None:
     for candidate in (hint, *typing.get_args(hint)):
         if isinstance(candidate, type) and issubclass(candidate, Enum):
@@ -204,4 +205,5 @@ def to_product(doc: dict) -> Product:
         attributes=_build(ATTRIBUTE_TYPES[doc["category"]], doc.get("attributes", {})),
         status=ProductStatus(doc["status"]),
         indexed_at=doc.get("indexed_at"),
+        image_url=doc.get("image_url") or f"/v1/catalog/images/{doc['product_id']}.svg",
     )

@@ -327,3 +327,10 @@ def test_liste_expeditions_filtre_et_pagination(api):
     assert {s["id"] for s in page["items"]}.isdisjoint({s["id"] for s in page2["items"]})
 
     assert_error(api.get("/shipments", headers=LOGISTICS, params={"limit": 500}), 400, "BAD_REQUEST")
+
+
+def test_metriques_prometheus(api):
+    api.get("/warehouses", headers=LOGISTICS)                           # au moins une requête comptée
+    r = httpx.get(DIRECT.rsplit("/v1", 1)[0] + "/metrics", timeout=5)
+    assert r.status_code == 200
+    assert "http_requests_total" in r.text and "http_request_duration_seconds" in r.text

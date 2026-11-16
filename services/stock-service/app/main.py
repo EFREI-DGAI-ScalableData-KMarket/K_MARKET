@@ -9,6 +9,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.repositories.stock import Conflict, InsufficientStock, NotFound
 from app.routers import stock
 
+from prometheus_fastapi_instrumentator import Instrumentator
+
 CODES = {
         400: "BAD_REQUEST",
         401: "UNAUTHORIZED",
@@ -20,7 +22,8 @@ CODES = {
 
 app = FastAPI(title="Stock Service", version="1.0.0")
 app.include_router(stock.router, prefix="/v1")
-
+# Métriques Prometheus sur /metrics (lues par Prometheus sur le réseau Docker, non routées par la gateway)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 @app.get("/v1/health")
 def health():

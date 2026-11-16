@@ -228,3 +228,16 @@ def test_stock_initial_refuse_le_produit_est_supprime():
     body = gql(CREATE, {"input": livre_input(), "stock": {"warehouse_id": 999999, "quantity": 10}})
     assert body.get("errors") and body["errors"][0]["extensions"]["code"] in {"NOT_FOUND", "UPSTREAM_ERROR"}
     assert page(limit=1)["total"] == before
+
+def test_image_du_produit():
+    p = ok(gql("{ product(product_id: 1) { name image_url } }"))["product"]
+    assert p["image_url"] == "/v1/catalog/images/1.svg"
+    r = httpx.get(URL.rsplit("/v1/catalog", 1)[0] + p["image_url"], timeout=5)    # sans jeton : public
+    assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
+    assert r.text.startswith("<svg")
+    assert httpx.get(f"{URL}/images/999999999.svg", timeout=5).status_code == 404
+
+
+def test_metriques_prometheus():
+    r = httpx.get(DIRECT.rsplit("/v1", 1)[0] + "/metrics", timeout=5)
+    assert r.status_code == 200 and "http_requests_total" in r.text
