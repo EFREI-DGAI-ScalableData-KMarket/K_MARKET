@@ -33,9 +33,9 @@ PAYMENT_LIMIT_CENTS = 20_000
 BATCH_ORDERS = 20_000          # commandes insérées par lot (mémoire constante)
 SHOWCASE_FILE = Path(__file__).with_name("showcase.json")
 
-# --------------------------------------------------------------------------------------
+
 # Référentiels (groupes, séries, marques : fictifs ; la vitrine réelle est dans showcase.json)
-# --------------------------------------------------------------------------------------
+
 GROUPS = [
     "NOVA9", "LUNARIA", "STELLARBOYS", "MOONLIT", "ECLIPSE7", "HALOGIRLS",
     "AURORA", "KINETIC", "BLOOMY", "NEONCREW", "SEOULSTAR", "VELVETINE",
@@ -115,7 +115,7 @@ WAREHOUSES = [
 PG_TABLES = [
     "orders.order_items", "orders.idempotency_keys", "orders.orders", "orders.customers",
     "payments.payments",
-    "inventory.reservations", "inventory.shipments", "inventory.stock", "inventory.warehouses",
+    "inventory.reservations", "inventory.shipments", "inventory.stock", "inventory.warehouses","inventory.outbox",
     "auth.refresh_tokens", "auth.api_keys", "auth.user_roles", "auth.users",  # auth.roles : référence, jamais vidée
 ]
 SERIAL_TABLES = [
@@ -125,9 +125,9 @@ SERIAL_TABLES = [
 ]
 
 
-# --------------------------------------------------------------------------------------
+
 # Paramètres
-# --------------------------------------------------------------------------------------
+
 def parse_args():
     p = argparse.ArgumentParser(description="Génère l'historique KMarket (PostgreSQL + MongoDB)")
     p.add_argument("--pg-dsn", default=os.getenv("PG_DSN"),
@@ -158,9 +158,9 @@ def require_env(name):
     return value
 
 
-# --------------------------------------------------------------------------------------
+
 # Petits utilitaires
-# --------------------------------------------------------------------------------------
+
 def psych(price):
     """Prix psychologique : finit par 90 centimes."""
     return (price // 100) * 100 + 90
@@ -185,9 +185,9 @@ def before_now(ts, now, margin_minutes=1):
     return min(ts, now - timedelta(minutes=margin_minutes))
 
 
-# --------------------------------------------------------------------------------------
+
 # Catalogue (MongoDB)
-# --------------------------------------------------------------------------------------
+
 def build_catalog(n_total, fake, now, showcase):
     """Retourne (produits, poids de popularité, groupe par produit, groupe en comeback)."""
     groups = GROUPS[:]
@@ -295,9 +295,9 @@ def build_catalog(n_total, fake, now, showcase):
     return products, weight, group_of, comeback_group
 
 
-# --------------------------------------------------------------------------------------
+
 # Entrepôts et stock (PostgreSQL inventory)
-# --------------------------------------------------------------------------------------
+
 def build_warehouses(n, fake):
     rows = []
     used = {w[0] for w in WAREHOUSES}
@@ -347,9 +347,9 @@ def build_stock(products, warehouses, now):
     return rows
 
 
-# --------------------------------------------------------------------------------------
+
 # Commandes, paiements, réservations, livraisons
-# --------------------------------------------------------------------------------------
+
 def status_for_age(age):
     """Statut cohérent avec l'âge de la commande (décision D2)."""
     if age < timedelta(minutes=10):
@@ -475,9 +475,9 @@ def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
     return order_row, items, payments, reservations, shipments,idem_keys, item_id, res_id, pay_id, ship_id
 
 
-# --------------------------------------------------------------------------------------
+
 # Comptes internes (auth)
-# --------------------------------------------------------------------------------------
+
 def build_auth(args, fake, now, demo_password, role_id):
     """role_id : {nom: id}, lu dans auth.roles (créée par 05_auth.sql)."""
 
@@ -500,9 +500,9 @@ def build_auth(args, fake, now, demo_password, role_id):
     return user_rows, user_role_rows, api_key_rows
 
 
-# --------------------------------------------------------------------------------------
+
 # Écriture
-# --------------------------------------------------------------------------------------
+
 def already_seeded(cur, catalog):
     cur.execute("SELECT EXISTS (SELECT 1 FROM orders.customers)")
     return cur.fetchone()[0] or catalog.estimated_document_count() > 0

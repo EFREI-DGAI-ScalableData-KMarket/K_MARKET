@@ -8,3 +8,4 @@ pyjwt
 pytest
 PyJWT
 prometheus-fastapi-instrumentator
+confluent-kafka

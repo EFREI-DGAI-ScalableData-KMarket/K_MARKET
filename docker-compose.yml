@@ -173,6 +173,42 @@ services:
       kafka:
         condition: service_healthy
 
+  # Crée les topics Kafka une fois (partitions explicites), puis se termine.
+  kafka-init:
+    image: apache/kafka:3.9.0
+    profiles: ["stream"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for t in inventory.stock-changed inventory.shipment-status-changed; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists \
+            --topic "$$t" --partitions 4 --replication-factor 1
+        done
+    restart: "no"
+
+  # Publie dans Kafka les événements de inventory.outbox (même image que stock-service).
+  stock-outbox-relay:
+    build: ./services/stock-service
+    profiles: ["stream"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.outbox_relay"]
+    environment:
+      POSTGRES_USER: inventory_svc
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:?voir .env}
+      POSTGRES_DB: kmarket
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+      KAFKA_BOOTSTRAP: kafka:19092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
   # MinIO : stockage objet S3 du Data Lake (zones raw / staging / curated / consumption)
   # Image Chainguard : MinIO ne publie plus d'image Docker communautaire depuis octobre 2025.
   minio:

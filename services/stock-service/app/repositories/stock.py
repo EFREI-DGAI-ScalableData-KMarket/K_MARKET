@@ -3,9 +3,13 @@
 Chaque méthode ouvre une connexion ; `with psycopg.connect(...)` valide la transaction
 en sortie de bloc, et l'annule si une exception est levée (tout ou rien).
 """
+import uuid
+from datetime import datetime, timezone
+
 import psycopg
 from psycopg import errors
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.core.config import settings
 
@@ -30,6 +34,10 @@ RESERVATION_COLS = "id, order_id, product_id, warehouse_id, quantity, status, cr
 SHIPMENT_COLS = "id, order_id, warehouse_id, status, created_at, shipped_at, delivered_at"
 NEXT_SHIPMENT_STATUS = {"preparing": "shipped", "shipped": "delivered"}
 
+# Topics Kafka (contrat : contracts/kafka-events.md). Clé = warehouse_id.
+TOPIC_STOCK = "inventory.stock-changed"
+TOPIC_SHIPMENT = "inventory.shipment-status-changed"
+
 STOCK_ITEM_SQL = """
     SELECT s.product_id, s.warehouse_id, w.name AS warehouse_name, s.quantity, s.updated_at
     FROM inventory.stock s
@@ -51,7 +59,7 @@ RESERVE_SQL = """
           ORDER BY quantity DESC, warehouse_id
           LIMIT 1
       )
-    RETURNING s.warehouse_id
+    RETURNING s.warehouse_id, s.quantity
 """
 
 
@@ -64,6 +72,36 @@ class StockRepository:
 
     def _connect(self):
         return psycopg.connect(self.dsn, row_factory=dict_row)
+
+    #  OUTBOX (événements Kafka)
+    @staticmethod
+    def _emit(conn, topic: str, warehouse_id: int, event_type: str, data: dict) -> None:
+        """Écrit l'événement dans inventory.outbox, DANS la transaction en cours.
+
+        Si la transaction est annulée, l'événement l'est aussi ; s'il est validé, le relais
+        (app/outbox_relay.py) le publiera dans Kafka, même si Kafka est arrêté à ce moment-là.
+        """
+        payload = {"event_id": str(uuid.uuid4()), "event_type": event_type,
+                   "occurred_at": datetime.now(timezone.utc).isoformat(), "warehouse_id": warehouse_id, **data}
+        conn.execute("INSERT INTO inventory.outbox (topic, event_key, payload) VALUES (%s, %s, %s)",
+                     (topic, str(warehouse_id), Jsonb(payload)))
+
+    def _emit_stock_changed(self, conn, product_id: int, warehouse_id: int, delta: int, quantity: int,
+                            reason: str, order_id: int | None = None) -> None:
+        """Ajoute le remplissage de l'entrepôt : le consommateur calcule le taux sans garder d'état."""
+        fill = conn.execute("""
+            SELECT w.capacity_units, COALESCE(SUM(s.quantity), 0)::int AS used_units
+            FROM inventory.warehouses w LEFT JOIN inventory.stock s ON s.warehouse_id = w.id
+            WHERE w.id = %s GROUP BY w.id""", (warehouse_id,)).fetchone()
+        self._emit(conn, TOPIC_STOCK, warehouse_id, "stock_changed", {
+            "product_id": product_id, "delta": delta, "quantity": quantity, "reason": reason,
+            "order_id": order_id, "warehouse_used_units": fill["used_units"],
+            "warehouse_capacity_units": fill["capacity_units"]})
+
+    def _emit_shipment(self, conn, shipment: dict, previous_status: str | None) -> None:
+        self._emit(conn, TOPIC_SHIPMENT, shipment["warehouse_id"], "shipment_status_changed", {
+            "shipment_id": shipment["id"], "order_id": shipment["order_id"],
+            "status": shipment["status"], "previous_status": previous_status})
 
     #  STOCK
     def get_stock_summary(self, product_id: int) -> dict:
@@ -95,6 +133,7 @@ class StockRepository:
                              "VALUES (%s, %s, %s, now())", (product_id, warehouse_id, quantity))
             except errors.UniqueViolation:   # création simultanée
                 raise Conflict("Stock déjà existant pour ce produit dans cet entrepôt")
+            self._emit_stock_changed(conn, product_id, warehouse_id, quantity, quantity, "initial")
         return self.get_stock_item(product_id, warehouse_id)
 
     #  RÉSERVATIONS (Saga)
@@ -139,6 +178,8 @@ class StockRepository:
                         "(order_id, product_id, warehouse_id, quantity, status, created_at, updated_at) "
                         "VALUES (%s, %s, %s, %s, 'reserved', now(), now())",
                         (order_id, product_id, row["warehouse_id"], quantity))
+                    self._emit_stock_changed(conn, product_id, row["warehouse_id"], -quantity, row["quantity"],
+                                             "reserve", order_id)
 
                 if missing:
                     raise InsufficientStock(missing)       # annule toute la transaction
@@ -166,9 +207,11 @@ class StockRepository:
                 raise NotFound(f"Aucune réservation pour la commande {order_id}")
             to_release = [r for r in rows if r["status"] != "released"]   # idempotent
             for r in to_release:
-                conn.execute("UPDATE inventory.stock SET quantity = quantity + %s, updated_at = now() "
-                             "WHERE product_id = %s AND warehouse_id = %s",
-                             (r["quantity"], r["product_id"], r["warehouse_id"]))
+                new_qty = conn.execute("UPDATE inventory.stock SET quantity = quantity + %s, updated_at = now() "
+                                       "WHERE product_id = %s AND warehouse_id = %s RETURNING quantity",
+                                       (r["quantity"], r["product_id"], r["warehouse_id"])).fetchone()["quantity"]
+                self._emit_stock_changed(conn, r["product_id"], r["warehouse_id"], r["quantity"], new_qty,
+                                         "release", order_id)
             if to_release:
                 conn.execute("UPDATE inventory.reservations SET status = 'released', updated_at = now() "
                              "WHERE id = ANY(%s)", ([r["id"] for r in to_release],))
@@ -214,12 +257,14 @@ class StockRepository:
             if conn.execute("SELECT 1 FROM inventory.shipments WHERE order_id = %s", (order_id,)).fetchone():
                 raise Conflict("Une expédition existe déjà pour cette commande")
             try:
-                return conn.execute(
+                shipment = conn.execute(
                     f"INSERT INTO inventory.shipments (order_id, warehouse_id, status, created_at) "
                     f"VALUES (%s, %s, 'preparing', now()) RETURNING {SHIPMENT_COLS}",
                     (order_id, warehouse_id)).fetchone()
             except errors.UniqueViolation:
                 raise Conflict("Une expédition existe déjà pour cette commande")
+            self._emit_shipment(conn, shipment, None)
+            return shipment
 
     def update_shipment_status(self, shipment_id: int, new_status: str) -> dict:
         with self._connect() as conn:
@@ -232,6 +277,8 @@ class StockRepository:
             if NEXT_SHIPMENT_STATUS.get(current["status"]) != new_status:
                 raise Conflict(f"Transition interdite : {current['status']} -> {new_status}")
             ts_column = "shipped_at" if new_status == "shipped" else "delivered_at"
-            return conn.execute(
+            shipment = conn.execute(
                 f"UPDATE inventory.shipments SET status = %s, {ts_column} = now() "
                 f"WHERE id = %s RETURNING {SHIPMENT_COLS}", (new_status, shipment_id)).fetchone()
+            self._emit_shipment(conn, shipment, current["status"])
+            return shipment

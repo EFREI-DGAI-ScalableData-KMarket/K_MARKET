@@ -91,3 +91,7 @@ test-stock: .env   ## Tests d'intégration du service Stock (pile lancée + seed
 
 test-catalog: .env   ## Tests d'intégration du service Catalogue (pile lancée + seed requis)
 	@set -a && . ./.env && set +a && python -m pytest services/catalog-service/tests -v -p no:cacheprovider
+
+kafka-tail:      ## Événements Kafka en direct (make kafka-tail TOPIC=inventory.shipment-status-changed)
+	docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+	  --topic $(or $(TOPIC),inventory.stock-changed) --from-beginning --property print.key=true
