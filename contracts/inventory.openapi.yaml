@@ -6,10 +6,19 @@ info:
     API REST du service Stock : entrepôts, quantités, réservations (Saga) et expéditions.
     Toutes les routes sont préfixées par /v1. Exposé par la gateway sur http://localhost:8000/v1.
 
-    Rôles applicatifs (claim `roles` du JWT, voir auth.openapi.yaml) :
-    - `service_account` : appels entre services (orders-api pour la Saga, catalog-api pour POST /stock)
-    - `logistics` : consultation, expéditions
-    - `admin` : tout
+    Rôles applicatifs (claim `roles` du JWT, voir auth.openapi.yaml), selon la matrice des droits du sujet :
+
+    | Action                                   | admin | catalog_manager | analyst | logistics | service_account |
+    ||-|--||--|--|
+    | Lire le stock (GET /stock/...)           | L     | L               | L       | L         | L               |
+    | Mettre à jour le stock (PUT /stock/...)  | E     | —               | —       | E         | E               |
+    | Créer le stock, Saga (reserve/commit/release) | E | —              | —       | —         | E               |
+    | GET /warehouses, GET /shipments          | L     | —               | L       | L         | —               |
+    | Écrire les expéditions                   | E     | —               | —       | E         | —               |
+
+    Le `PUT /v1/inventory/{id}` de la matrice du sujet correspond ici à
+    `PUT /v1/stock/{product_id}/warehouses/{warehouse_id}` (le stock est tenu par produit et par entrepôt).
+    Chaque refus (401, 403) est journalisé : date, utilisateur, rôles, action.
 
     Erreurs : toutes les réponses 4xx utilisent le schéma `Error`.
 servers:
@@ -89,7 +98,7 @@ paths:
     get:
       tags: [Stock]
       summary: Stock d'un produit, total et détail par entrepôt
-      description: "Rôles : service_account, logistics, admin."
+      description: "Rôles : admin, logistics, analyst, catalog_manager, service_account."
       parameters:
         - $ref: '#/components/parameters/ProductId'
       responses:
@@ -106,7 +115,7 @@ paths:
     get:
       tags: [Stock]
       summary: Stock d'un produit dans un entrepôt
-      description: "Rôles : service_account, logistics, admin."
+      description: "Rôles : admin, logistics, analyst, catalog_manager, service_account."
       parameters:
         - $ref: '#/components/parameters/ProductId'
         - $ref: '#/components/parameters/WarehouseId'
@@ -116,6 +125,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StockItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Stock]
+      summary: Fixer la quantité disponible (réapprovisionnement, inventaire)
+      description: |
+        Remplace la quantité disponible par la valeur donnée (idempotent : la même valeur ne change rien).
+        La ligne doit exister (sinon 404 : la créer avec POST /stock).
+        Émet un événement `inventory.stock-changed` (reason `adjustment`) si la quantité change.
+        Rôles : admin, logistics, service_account.
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+        - $ref: '#/components/parameters/WarehouseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StockUpdate' }
+      responses:
+        '200':
+          description: Ligne de stock après mise à jour
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -217,7 +252,7 @@ paths:
     get:
       tags: [Warehouses]
       summary: Lister les entrepôts et leur taux de remplissage
-      description: "Rôles : logistics, admin."
+      description: "Rôles : admin, logistics, analyst."
       responses:
         '200':
           description: Liste des entrepôts
@@ -236,7 +271,7 @@ paths:
     get:
       tags: [Shipments]
       summary: Lister les expéditions (filtres + pagination)
-      description: "Rôles : logistics, admin."
+      description: "Rôles : admin, logistics, analyst."
       parameters:
         - name: warehouse_id
           in: query
@@ -384,6 +419,12 @@ components:
         product_id: { type: integer, example: 301 }
         warehouse_id: { type: integer, example: 1 }
         quantity: { type: integer, minimum: 0, example: 100 }
+
+    StockUpdate:
+      type: object
+      required: [quantity]
+      properties:
+        quantity: { type: integer, minimum: 0, example: 250, description: Nouvelle quantité disponible (valeur absolue) }
 
     StockItem:
       type: object

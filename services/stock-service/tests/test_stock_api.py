@@ -111,11 +111,23 @@ def test_401_jeton_expire(api, stocked_product):
     assert_error(api.get(f"/stock/{stocked_product}", headers=token("admin", expires_in=-10)), 401, "UNAUTHORIZED")
 
 
-def test_403_role_insuffisant(api):
-    assert_error(api.get("/warehouses", headers=token("analyst")), 403, "FORBIDDEN")
-    assert_error(api.get("/warehouses", headers=SERVICE), 403, "FORBIDDEN")      # service_account : pas les entrepôts
+def test_403_role_insuffisant(api, stocked_product):
+    assert_error(api.get("/warehouses", headers=SERVICE), 403, "FORBIDDEN")           # service_account : pas les entrepôts
+    assert_error(api.get("/warehouses", headers=token("catalog_manager")), 403, "FORBIDDEN")
     assert_error(api.post("/stock/reserve", headers=LOGISTICS,
                           json={"order_id": new_id(), "items": [{"product_id": 1, "quantity": 1}]}), 403, "FORBIDDEN")
+    assert_error(api.put(f"/stock/{stocked_product}/warehouses/1", headers=token("analyst"),
+                         json={"quantity": 1}), 403, "FORBIDDEN")                  # analyst : lecture seule
+    assert_error(api.put(f"/stock/{stocked_product}/warehouses/1", headers=token("catalog_manager"),
+                         json={"quantity": 1}), 403, "FORBIDDEN")
+
+
+def test_matrice_des_droits_lecture(api, stocked_product):
+    """Matrice du sujet : catalog_manager et analyst lisent les stocks ; analyst lit les entrepôts."""
+    for role in ("admin", "logistics", "analyst", "catalog_manager", "service_account"):
+        assert api.get(f"/stock/{stocked_product}", headers=token(role)).status_code == 200, role
+    for role in ("admin", "logistics", "analyst"):
+        assert api.get("/warehouses", headers=token(role)).status_code == 200, role
 
 
 #  entrepôts
@@ -151,6 +163,27 @@ def test_stock_par_entrepot(api, stocked_product):
     assert r.status_code == 200
     assert r.json()["quantity"] == qty
     assert_error(api.get(f"/stock/{stocked_product}/warehouses/999999", headers=LOGISTICS), 404, "NOT_FOUND")
+
+
+#  mise à jour du stock (réapprovisionnement)
+def test_mise_a_jour_du_stock(api, stocked_product):
+    wid, original = next(iter(warehouse_qty(api, stocked_product).items()))
+    try:
+        r = api.put(f"/stock/{stocked_product}/warehouses/{wid}", headers=LOGISTICS, json={"quantity": original + 7})
+        assert r.status_code == 200 and r.json()["quantity"] == original + 7
+        # idempotent : même valeur, même résultat
+        r = api.put(f"/stock/{stocked_product}/warehouses/{wid}", headers=token("service_account"),
+                    json={"quantity": original + 7})
+        assert r.status_code == 200 and r.json()["quantity"] == original + 7
+    finally:
+        api.put(f"/stock/{stocked_product}/warehouses/{wid}", headers=ADMIN, json={"quantity": original})
+    assert warehouse_qty(api, stocked_product)[wid] == original
+
+
+def test_mise_a_jour_du_stock_erreurs(api, stocked_product):
+    assert_error(api.put(f"/stock/{new_id()}/warehouses/1", headers=LOGISTICS, json={"quantity": 5}), 404, "NOT_FOUND")
+    assert_error(api.put(f"/stock/{stocked_product}/warehouses/1", headers=LOGISTICS, json={"quantity": -1}),
+                 400, "BAD_REQUEST")
 
 
 #  création du stock
@@ -329,6 +362,7 @@ def test_liste_expeditions_filtre_et_pagination(api):
     assert_error(api.get("/shipments", headers=LOGISTICS, params={"limit": 500}), 400, "BAD_REQUEST")
 
 
+#  métriques
 def test_metriques_prometheus(api):
     api.get("/warehouses", headers=LOGISTICS)                           # au moins une requête comptée
     r = httpx.get(DIRECT.rsplit("/v1", 1)[0] + "/metrics", timeout=5)

@@ -98,4 +98,14 @@ class Mutation:
         return to_product(service().set_status(product_id, "active"))
 
 
-schema = strawberry.Schema(query=Query, mutation=Mutation, config=StrawberryConfig(auto_camel_case=False))
+class CatalogSchema(strawberry.Schema):
+    """Ne journalise pas en erreur (avec trace) les refus et erreurs métier prévus (extensions.code) :
+    ils sont déjà tracés proprement (refus : logger « security »). Les erreurs inattendues restent journalisées."""
+
+    def process_errors(self, errors, execution_context=None):
+        unexpected = [e for e in errors if not (e.extensions or {}).get("code")]
+        if unexpected:
+            super().process_errors(unexpected, execution_context)
+
+
+schema = CatalogSchema(query=Query, mutation=Mutation, config=StrawberryConfig(auto_camel_case=False))

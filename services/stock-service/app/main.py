@@ -1,5 +1,5 @@
 import uuid
-
+import logging
 from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -19,7 +19,7 @@ CODES = {
         409: "CONFLICT",
         422: "INSUFFICIENT_STOCK"
         }
-
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 app = FastAPI(title="Stock Service", version="1.0.0")
 app.include_router(stock.router, prefix="/v1")
 # Métriques Prometheus sur /metrics (lues par Prometheus sur le réseau Docker, non routées par la gateway)

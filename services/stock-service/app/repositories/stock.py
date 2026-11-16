@@ -136,6 +136,20 @@ class StockRepository:
             self._emit_stock_changed(conn, product_id, warehouse_id, quantity, quantity, "initial")
         return self.get_stock_item(product_id, warehouse_id)
 
+    def set_quantity(self, product_id: int, warehouse_id: int, quantity: int) -> dict:
+        """Fixe la quantité disponible (réapprovisionnement, inventaire). Idempotent : même valeur, aucun événement."""
+        with self._connect() as conn:
+            current = conn.execute("SELECT quantity FROM inventory.stock WHERE product_id = %s AND warehouse_id = %s "
+                                   "FOR UPDATE", (product_id, warehouse_id)).fetchone()
+            if current is None:
+                raise NotFound("Aucun stock pour ce produit dans cet entrepôt (créer avec POST /stock)")
+            delta = quantity - current["quantity"]
+            if delta:
+                conn.execute("UPDATE inventory.stock SET quantity = %s, updated_at = now() "
+                             "WHERE product_id = %s AND warehouse_id = %s", (quantity, product_id, warehouse_id))
+                self._emit_stock_changed(conn, product_id, warehouse_id, delta, quantity, "adjustment")
+        return self.get_stock_item(product_id, warehouse_id)
+
     #  RÉSERVATIONS (Saga)
     def _reservations(self, conn, order_id: int, product_id: int | None = None, lock: bool = False) -> list[dict]:
         sql = f"SELECT {RESERVATION_COLS} FROM inventory.reservations WHERE order_id = %s"

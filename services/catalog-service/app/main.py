@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -6,6 +7,7 @@ from app.routers import catalog
 from app.schemas.catalog import service
 from app.services.images import product_svg
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s%(levelname)s %(message)s")
 app = FastAPI(title="Catalog Service", version="1.0.0")
 
 

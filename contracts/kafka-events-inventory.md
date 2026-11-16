@@ -6,7 +6,7 @@ Garantie **au moins une fois** : un événement peut arriver deux fois -> dédup
 
 | Topic | Partitions | Clé | Émis par |
 |---|---|---|---|
-| `inventory.stock-changed` | 4 | `warehouse_id` | `POST /stock`, `POST /stock/reserve`, `POST /stock/release` |
+| `inventory.stock-changed` | 4 | `warehouse_id` | `POST /stock`, `POST /stock/reserve`, `POST /stock/release`, `PUT /stock/{id}/warehouses/{wid} `|
 | `inventory.shipment-status-changed` | 4 | `warehouse_id` | `POST /shipments`, `PATCH /shipments/{id}/status` |
 
 La clé `warehouse_id` garantit l'ordre des événements d'un même entrepôt (même partition).
@@ -33,7 +33,7 @@ La clé `warehouse_id` garantit l'ordre des événements d'un même entrepôt (m
 |---|---|
 | `delta` | Variation (négative pour une réservation, positive pour une libération ou une création) |
 | `quantity` | Quantité disponible après la modification, pour ce produit dans cet entrepôt |
-| `reason` | `initial` (création du stock), `reserve`, `release` |
+| `reason` | `initial` (création du stock), `reserve`, `release`, `adjustment` |
 | `order_id` | Commande concernée ; `null` pour `initial` |
 | `warehouse_used_units`, `warehouse_capacity_units` | Remplissage de l'entrepôt après la modification : taux = used / capacity, alerte au-dessus de 0,90, sans état côté consommateur |
 

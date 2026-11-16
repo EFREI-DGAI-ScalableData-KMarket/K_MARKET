@@ -23,6 +23,8 @@ class StockItem(BaseModel):
     quantity: int
     updated_at: Optional[datetime] = None
 
+class StockUpdate(BaseModel):
+    quantity: int = Field(ge=0, description="Nouvelle quantité disponible (valeur absolue)")
 
 class StockSummary(BaseModel):
     product_id: int

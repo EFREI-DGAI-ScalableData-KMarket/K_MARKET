@@ -8,16 +8,18 @@ from app.repositories.stock import StockRepository
 from app.schemas.stock import (
     OrderRef, ReleaseRequest, ReservationResult, ReserveRequest,
     Shipment, ShipmentCreate, ShipmentPage, ShipmentStatus, ShipmentStatusUpdate,
-    StockCreate, StockItem, StockSummary, Warehouse,
+    StockCreate, StockItem, StockSummary, StockUpdate, Warehouse,
 )
 
 router = APIRouter()
 repo = StockRepository()
 
-# Rôles par usage (voir la description de chaque route dans le contrat)
-SERVICE = Depends(require_roles("service_account", "admin"))               # Saga, catalogue
-READ = Depends(require_roles("service_account", "logistics", "admin"))     # lecture du stock
-LOGISTICS = Depends(require_roles("logistics", "admin"))                   # entrepôts, expéditions
+SERVICE = Depends(require_roles("service_account", "admin"))                                    # Saga, catalogue
+READ = Depends(require_roles("admin", "logistics", "analyst", "catalog_manager", "service_account"))  # lire le stock
+UPDATE = Depends(require_roles("admin", "logistics", "service_account"))                        # mettre à jour le stock
+WAREHOUSES = Depends(require_roles("admin", "logistics", "analyst"))                            # GET /warehouses
+SHIPMENTS_READ = Depends(require_roles("admin", "logistics", "analyst"))
+LOGISTICS = Depends(require_roles("admin", "logistics"))                                        # écrire les expéditions
 
 
 # - STOCK
@@ -35,6 +37,9 @@ def get_stock(product_id: int):
 def get_stock_in_warehouse(product_id: int, warehouse_id: int):
     return repo.get_stock_item(product_id, warehouse_id)
 
+@router.put("/stock/{product_id}/warehouses/{warehouse_id}", response_model=StockItem, dependencies=[UPDATE])
+def set_stock_in_warehouse(product_id:int, warehouse_id:int, body: StockUpdate):
+    return repo.set_quantity(product_id,warehouse_id,body.quantity)
 
 # - RÉSERVATIONS (Saga)
 @router.post("/stock/reserve", status_code=201, response_model=ReservationResult, dependencies=[SERVICE])
@@ -54,13 +59,13 @@ def release_stock(body: ReleaseRequest):
 
 
 # - ENTREPÔTS
-@router.get("/warehouses", response_model=list[Warehouse], dependencies=[LOGISTICS])
+@router.get("/warehouses", response_model=list[Warehouse], dependencies=[WAREHOUSES])
 def get_warehouses():
     return repo.get_warehouses()
 
 
 # - EXPÉDITIONS
-@router.get("/shipments", response_model=ShipmentPage, dependencies=[LOGISTICS])
+@router.get("/shipments", response_model=ShipmentPage, dependencies=[SHIPMENTS_READ])
 def get_shipments(
     warehouse_id: Optional[int] = None,
     status: Optional[ShipmentStatus] = None,
