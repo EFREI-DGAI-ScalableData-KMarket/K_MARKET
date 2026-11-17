@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+/* Thème : les couleurs sont des variables CSS, le choix clair/sombre change data-theme sur <html>. */
+:root,
+[data-theme="light"] {
+  --bg: #faf6f4;
+  --surface: #ffffff;
+  --surface-2: #f7eff2;
+  --line: #eadfe4;
+  --ink: #2b1f27;
+  --muted: #6e5d68;
+  --accent: #b83265;
+  --accent-hover: #9c2453;
+  --accent-ink: #ffffff;
+  --ok-bg: #dcfce7;
+  --ok: #166534;
+  --warn-bg: #fef3c7;
+  --warn: #92400e;
+  --bad-bg: #fee2e2;
+  --bad: #991b1b;
+  --info-bg: #fbe7ef;
+  --info: #8e1f4c;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #1a1418;
+  --surface: #241c22;
+  --surface-2: #2e242b;
+  --line: #3a2e36;
+  --ink: #f6eef2;
+  --muted: #bcaab5;
+  --accent: #f2a7c3;
+  --accent-hover: #f7c3d7;
+  --accent-ink: #1a1418;
+  --ok-bg: #16291f;
+  --ok: #86efac;
+  --warn-bg: #3a2e14;
+  --warn: #fcd34d;
+  --bad-bg: #40191f;
+  --bad: #fca5a5;
+  --info-bg: #3a2232;
+  --info: #f2a7c3;
+  color-scheme: dark;
+}
+
+/* Expose les variables à Tailwind : bg-surface, text-muted, border-line, etc. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-ok-bg: var(--ok-bg);
+  --color-ok: var(--ok);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn: var(--warn);
+  --color-bad-bg: var(--bad-bg);
+  --color-bad: var(--bad);
+  --color-info-bg: var(--info-bg);
+  --color-info: var(--info);
+  --font-sans: "Pretendard Variable", Pretendard, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
