@@ -1,23 +1,22 @@
 """Visuels SVG des produits, générés à la volée (aucun fichier stocké).
 
+Visuel seul, sans texte : le nom, la catégorie, le prix et le statut sont affichés par l'interface
+autour de l'image ; les répéter dans le visuel ferait doublon.
+Format 4:3 (400 × 300), celui des cartes du catalogue, pour que rien ne soit rogné.
+
 Couleurs déterministes : un même artiste / une même série / une même marque garde toujours le même dégradé.
 Formes génériques par catégorie (pas de pochette ni de logo réels : droits d'auteur).
 """
 import hashlib
-from xml.sax.saxutils import escape
 
-# Dégradés (haut-gauche -> bas-droite)
+# Dégradés pastel de luminosité proche (haut-gauche -> bas-droite), accordés au thème rosé de l'interface
 PALETTE = [
-    ("#ff9a9e", "#fad0c4"), ("#a18cd1", "#fbc2eb"), ("#84fab0", "#8fd3f4"), ("#fccb90", "#d57eeb"),
-    ("#e0c3fc", "#8ec5fc"), ("#f6d365", "#fda085"), ("#89f7fe", "#66a6ff"), ("#fbc2eb", "#a6c1ee"),
-    ("#ff758c", "#ff7eb3"), ("#43e97b", "#38f9d7"), ("#fa709a", "#fee140"), ("#30cfd0", "#330867"),
-    ("#667eea", "#764ba2"), ("#f093fb", "#f5576c"), ("#5ee7df", "#b490ca"), ("#c471f5", "#fa71cd"),
+    ("#f4a6c0", "#e8b8d8"), ("#c9a7e8", "#e6b7d9"), ("#a9c4f0", "#c6b6ec"), ("#f5b99a", "#f2a6b8"),
+    ("#9fd6c9", "#b7c8ec"), ("#f3c88f", "#f0a9a0"), ("#b6a3e6", "#f0a8c8"), ("#e9a3b4", "#c7a6dd"),
+    ("#a7d3e8", "#d5b3e3"), ("#f2b3c9", "#f6cfa8"), ("#bfb0ea", "#a9d4e4"), ("#e7aecb", "#b9b2ea"),
 ]
 
-LABELS = {"Album": "Album", "Lightstick": "Lightstick", "Merch": "Merch",
-          "Drama": "Drama", "Livre": "Livre", "Beaute": "Beauté"}
-
-# Icône blanche centrée sur (200, 165), environ 150 px
+# Icône blanche dessinée autour de (200, 165) ; décalée de -15 px à l'affichage pour être centrée dans 400 × 300
 ICONS = {
     "Album": """
       <circle cx="200" cy="165" r="78" fill="#fff" fill-opacity=".9"/>
@@ -49,48 +48,19 @@ ICONS = {
 }
 
 
-def _subtitle(doc: dict) -> str:
+def _color_key(doc: dict) -> str:
     a = doc.get("attributes", {})
-    return a.get("artist") or a.get("serie") or a.get("marque") or a.get("auteur") or ""
-
-
-def _wrap(text: str, width: int = 26, max_lines: int = 2) -> list[str]:
-    lines, current = [], ""
-    for word in text.split():
-        if len(current) + len(word) + 1 > width and current:
-            lines.append(current)
-            current = word
-        else:
-            current = f"{current} {word}".strip()
-    lines.append(current)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = lines[-1][: width - 1].rstrip() + "…"
-    return lines
+    return a.get("artist") or a.get("serie") or a.get("marque") or a.get("auteur") or doc["category"]
 
 
 def product_svg(doc: dict) -> str:
-    category = doc["category"]
-    key = _subtitle(doc) or category
-    c1, c2 = PALETTE[int(hashlib.md5(key.encode()).hexdigest(), 16) % len(PALETTE)]
-    name_lines = _wrap(doc["name"])
-    name_svg = "".join(
-        f'<text x="24" y="{300 + i * 28}" font-size="22" font-weight="700" fill="#1f1f2e">{escape(line)}</text>'
-        for i, line in enumerate(name_lines))
-    sub_y = 300 + len(name_lines) * 28 + 4
-    price = f'{doc["price_cents"] / 100:.2f} €'.replace(".", ",")
-    archived = ('<rect x="0" y="0" width="400" height="400" fill="#fff" fill-opacity=".45"/>'
-                '<text x="376" y="48" text-anchor="end" font-size="14" font-weight="700" fill="#555">ARCHIVÉ</text>'
-                if doc.get("status") == "inactive" else "")
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400" font-family="Helvetica, Arial, sans-serif">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c1}"/><stop offset="1" stop-color="{c2}"/></linearGradient></defs>
-  <rect width="400" height="400" rx="24" fill="url(#g)"/>
-  <rect x="20" y="20" width="{len(LABELS[category]) * 9 + 28}" height="30" rx="15" fill="#fff" fill-opacity=".85"/>
-  <text x="34" y="41" font-size="14" font-weight="700" fill="#1f1f2e">{LABELS[category]}</text>
-  {ICONS[category]}
-  <rect x="0" y="268" width="400" height="132" fill="#fff" fill-opacity=".82"/>
-  {name_svg}
-  <text x="24" y="{sub_y + 16}" font-size="15" fill="#555">{escape(key if key != category else "")}</text>
-  <text x="376" y="{sub_y + 16}" text-anchor="end" font-size="17" font-weight="700" fill="#1f1f2e">{price}</text>
-  {archived}
+    c1, c2 = PALETTE[int(hashlib.md5(_color_key(doc).encode()).hexdigest(), 16) % len(PALETTE)]
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c1}"/><stop offset="1" stop-color="{c2}"/></linearGradient>
+    <filter id="s" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000" flood-opacity=".12"/></filter>
+  </defs>
+  <rect width="400" height="300" fill="url(#g)"/>
+  <g transform="translate(0 -15)" filter="url(#s)">{ICONS[doc["category"]]}
+  </g>
 </svg>"""

@@ -125,6 +125,7 @@ services:
     depends_on:
       - stock-service
       - catalog-service
+      - ui
 
   # Kafka (KRaft, sans ZooKeeper)
   # Deux listeners : INTERNAL (kafka:19092) pour les conteneurs, EXTERNAL (localhost:9092) pour l'hôte.
@@ -169,6 +170,17 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # Expose à Prometheus les métriques de Kafka : brokers, offsets des topics, retard des consommateurs.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: kafka-exporter
+    profiles: ["stream"]
+    restart: unless-stopped
+    command: ["--kafka.server=kafka:19092"]   # listener INTERNAL
     depends_on:
       kafka:
         condition: service_healthy
@@ -327,6 +339,12 @@ services:
       - spark-master
     volumes:
       - ./spark:/opt/spark-apps:ro
+
+  
+  ui:
+    build: ./ui
+    container_name: ui
+    restart: unless-stopped
 
 volumes:
   pgdata:

@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "5s",
   "time": {
     "from": "now-15m",
@@ -35,10 +35,10 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "OK ; DÉGRADÉ si plus de 5 % de 5xx sur 1 min (relais : plus de 100 événements en attente) ; ARRÊTÉ si /metrics ne répond plus",
+      "description": "Même règle que l'onglet Observabilité de l'UI : ARRÊTÉ si /metrics ne répond plus ; DÉGRADÉ si une alerte de alerts.yml est déclenchée pour ce composant (5xx > 5 %, p95 > 500 ms, outbox > 100…) ; sinon OK.",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 1
       },
@@ -48,7 +48,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=\"stock-service\"} * (1 + scalar(((sum(rate(http_requests_total{job=\"stock-service\",status=\"5xx\"}[1m])) or vector(0)) / clamp_min((sum(rate(http_requests_total{job=\"stock-service\"}[1m])) or vector(0)), 1e-9)) < bool 0.05))",
+          "expr": "up{job=\"stock-service\"} * (2 - scalar(count(ALERTS{alertstate=\"firing\",job=\"stock-service\"}) > bool 0 or vector(0)))",
           "legendFormat": "",
           "refId": "A",
           "format": "time_series",
@@ -126,11 +126,11 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "OK ; DÉGRADÉ si plus de 5 % de 5xx sur 1 min (relais : plus de 100 événements en attente) ; ARRÊTÉ si /metrics ne répond plus",
+      "description": "Même règle que l'onglet Observabilité de l'UI : ARRÊTÉ si /metrics ne répond plus ; DÉGRADÉ si une alerte de alerts.yml est déclenchée pour ce composant (5xx > 5 %, p95 > 500 ms, outbox > 100…) ; sinon OK.",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 3,
         "y": 1
       },
       "targets": [
@@ -139,7 +139,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=\"catalog-service\"} * (1 + scalar(((sum(rate(http_requests_total{job=\"catalog-service\",status=\"5xx\"}[1m])) or vector(0)) / clamp_min((sum(rate(http_requests_total{job=\"catalog-service\"}[1m])) or vector(0)), 1e-9)) < bool 0.05))",
+          "expr": "up{job=\"catalog-service\"} * (2 - scalar(count(ALERTS{alertstate=\"firing\",job=\"catalog-service\"}) > bool 0 or vector(0)))",
           "legendFormat": "",
           "refId": "A",
           "format": "time_series",
@@ -217,11 +217,11 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "OK ; DÉGRADÉ si plus de 5 % de 5xx sur 1 min (relais : plus de 100 événements en attente) ; ARRÊTÉ si /metrics ne répond plus",
+      "description": "Même règle que l'onglet Observabilité de l'UI : ARRÊTÉ si /metrics ne répond plus ; DÉGRADÉ si une alerte de alerts.yml est déclenchée pour ce composant (5xx > 5 %, p95 > 500 ms, outbox > 100…) ; sinon OK.",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 6,
         "y": 1
       },
       "targets": [
@@ -230,7 +230,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=\"gateway\"} * 2",
+          "expr": "up{job=\"gateway\"} * (2 - scalar(count(ALERTS{alertstate=\"firing\",job=\"gateway\"}) > bool 0 or vector(0)))",
           "legendFormat": "",
           "refId": "A",
           "format": "time_series",
@@ -308,10 +308,101 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "OK ; DÉGRADÉ si plus de 5 % de 5xx sur 1 min (relais : plus de 100 événements en attente) ; ARRÊTÉ si /metrics ne répond plus",
+      "description": "Même règle que l'onglet Observabilité de l'UI : ARRÊTÉ si /metrics ne répond plus ; DÉGRADÉ si une alerte de alerts.yml est déclenchée pour ce composant (5xx > 5 %, p95 > 500 ms, outbox > 100…) ; sinon OK.",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
+        "x": 9,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"stock-outbox-relay\"} * (2 - scalar(count(ALERTS{alertstate=\"firing\",job=\"stock-outbox-relay\"}) > bool 0 or vector(0)))",
+          "legendFormat": "",
+          "refId": "A",
+          "format": "time_series",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "ARRÊTÉ",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "DÉGRADÉ",
+                  "color": "orange",
+                  "index": 1
+                },
+                "2": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "noValue": "ARRÊTÉ",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Kafka",
+      "id": 17,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Même règle que l'onglet Observabilité de l'UI : ARRÊTÉ si /metrics ne répond plus ; DÉGRADÉ si une alerte de alerts.yml est déclenchée pour ce composant (5xx > 5 %, p95 > 500 ms, outbox > 100…) ; sinon OK. Kafka : ARRÊTÉ aussi si kafka-exporter ne voit plus aucun broker (alerte KafkaDown).",
+      "gridPos": {
+        "h": 4,
+        "w": 3,
         "x": 12,
         "y": 1
       },
@@ -321,7 +412,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=\"stock-outbox-relay\"} * (1 + scalar((sum(outbox_pending_events) or vector(0)) < bool 100))",
+          "expr": "up{job=\"kafka\"} * scalar(max(kafka_brokers) > bool 0 or vector(0)) * (2 - scalar(count(ALERTS{alertstate=\"firing\",job=\"kafka\"}) > bool 0 or vector(0)))",
           "legendFormat": "",
           "refId": "A",
           "format": "time_series",
@@ -401,8 +492,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 16,
+        "w": 9,
+        "x": 15,
         "y": 1
       },
       "targets": [
@@ -814,6 +905,104 @@
     },
     {
       "type": "timeseries",
+      "title": "Kafka : messages écrits par topic (par seconde)",
+      "id": 18,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Mesuré côté broker par kafka-exporter (progression des offsets), tous producteurs confondus. Les topics internes __* sont exclus.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (topic) (rate(kafka_topic_partition_current_offset{topic!~\"__.*\"}[1m]))",
+          "legendFormat": "{{topic}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kafka : retard des consommateurs",
+      "id": 19,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Messages publiés mais pas encore lus, par groupe de consommateurs (Spark…). Cible du sujet : moins de 1 000.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag)",
+          "legendFormat": "{{consumergroup}} · {{topic}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
       "title": "Gateway : appels refusés par la limitation (429/s)",
       "id": 16,
       "datasource": {
@@ -825,7 +1014,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 39
       },
       "targets": [
         {

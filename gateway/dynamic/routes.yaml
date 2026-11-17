@@ -11,6 +11,11 @@ http:
         period: 1s
         burst: 100
 
+    prometheus-api:
+      replacePathRegex:
+        regex: "^/v1/metrics/(query|alerts)$"
+        replacement: "/api/v1/$1"  
+
   routers:
     stock:
       rule: "PathPrefix(`/v1/stock`) || PathPrefix(`/v1/warehouses`) || PathPrefix(`/v1/shipments`)"
@@ -24,6 +29,19 @@ http:
       middlewares: [rate-limit]
       service: catalog
 
+    ui:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      entryPoints:
+        - web         
+      service: ui
+
+    metrics:
+      rule: "(Path(`/v1/metrics/query`) || Path(`/v1/metrics/alerts`)) && Method(`GET`)"
+      entryPoints: [web]
+      middlewares: [rate-limit, prometheus-api]
+      service: prometheus
+
   services:
     stock:
       loadBalancer:
@@ -34,3 +52,13 @@ http:
       loadBalancer:
         servers:
           - url: "http://catalog-service:8004"
+
+    ui:
+      loadBalancer:
+        servers:
+          - url: "http://ui:80"
+
+    prometheus:
+      loadBalancer:
+        servers:
+          - url: "http://prometheus:9090"

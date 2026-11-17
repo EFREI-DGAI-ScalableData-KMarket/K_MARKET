@@ -31,3 +31,25 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "{{ $value }} événements Kafka en attente dans inventory.outbox (Kafka arrêté ?)"
+
+      - alert: KafkaDown
+        expr: up{job="kafka"} == 0 or max by (job) (kafka_brokers) < 1
+        labels: { severity: critical }
+        annotations:
+          summary: "Kafka injoignable : plus aucun événement n'est publié"
+
+      - alert: GatewayErrors
+        expr: |
+          sum(rate(traefik_entrypoint_requests_total{entrypoint="web",code=~"5.."}[1m]))
+            / sum(rate(traefik_entrypoint_requests_total{entrypoint="web"}[1m])) > 0.05
+        for: 30s
+        labels: { severity: warning, job: gateway }
+        annotations:
+          summary: "gateway : plus de 5 % de réponses 5xx"
+
+      - alert: KafkaConsumerLag
+        expr: sum by (job, consumergroup) (kafka_consumergroup_lag) > 1000
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "Kafka : {{ $labels.consumergroup }} a plus de 1 000 messages de retard"
