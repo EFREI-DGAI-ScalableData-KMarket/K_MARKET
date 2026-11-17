@@ -121,6 +121,32 @@ class StockRepository:
             raise NotFound("Aucun stock pour ce produit dans cet entrepôt")
         return row
 
+    def _summaries(self, conn, product_ids: list[int]) -> list[dict]:
+        rows = conn.execute(
+            "SELECT s.product_id, s.warehouse_id, w.name AS warehouse_name, s.quantity, s.updated_at "
+            "FROM inventory.stock s JOIN inventory.warehouses w ON w.id = s.warehouse_id "
+            "WHERE s.product_id = ANY(%s) ORDER BY s.product_id, s.warehouse_id", (product_ids,)).fetchall()
+        by_product: dict[int, list] = {}
+        for r in rows:
+            by_product.setdefault(r["product_id"], []).append(r)
+        return [{"product_id": pid, "total_quantity": sum(r["quantity"] for r in items), "by_warehouse": items}
+                for pid, items in by_product.items()]
+
+    def get_stock_summaries(self, product_ids: list[int]) -> list[dict]:
+        """Lecture groupée ; ordre de la demande, ids sans stock ignorés."""
+        with self._connect() as conn:
+            found = {s["product_id"]: s for s in self._summaries(conn, list(set(product_ids)))}
+        return [found[i] for i in dict.fromkeys(product_ids) if i in found]
+
+    def get_low_stock(self, threshold: int, limit: int) -> list[dict]:
+        """Produits dont le stock total (tous entrepôts) est <= threshold, du plus bas au plus haut."""
+        with self._connect() as conn:
+            ids = [r["product_id"] for r in conn.execute(
+                "SELECT product_id FROM inventory.stock GROUP BY product_id HAVING SUM(quantity) <= %s "
+                "ORDER BY SUM(quantity), product_id LIMIT %s", (threshold, limit)).fetchall()]
+            found = {s["product_id"]: s for s in self._summaries(conn, ids)}
+        return [found[i] for i in ids]
+
     def create_initial_stock(self, product_id: int, warehouse_id: int, quantity: int) -> dict:
         with self._connect() as conn:
             if not conn.execute("SELECT 1 FROM inventory.warehouses WHERE id = %s", (warehouse_id,)).fetchone():
@@ -246,6 +272,11 @@ class StockRepository:
             r["fill_rate"] = round(fill, 4)
             r["status"] = "near_full" if fill > 0.90 else "normal"
         return rows
+
+    def get_warehouse_names(self) -> list[dict]:
+        with self._connect() as conn:
+            return conn.execute("SELECT id, name FROM inventory.warehouses ORDER BY id").fetchall()
+
 
     #  EXPÉDITIONS
     def get_shipments(self, warehouse_id: int | None, status: str | None, limit: int, offset: int) -> dict:

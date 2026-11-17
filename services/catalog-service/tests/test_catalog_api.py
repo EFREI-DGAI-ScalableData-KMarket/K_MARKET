@@ -241,3 +241,11 @@ def test_image_du_produit():
 def test_metriques_prometheus():
     r = httpx.get(DIRECT.rsplit("/v1", 1)[0] + "/metrics", timeout=5)
     assert r.status_code == 200 and "http_requests_total" in r.text
+
+def test_validator_date_album_et_attributs_merch():
+    album = {"name": "Test date", "category": "Album", "price_cents": 1990, "tags": ["pytest"],
+             "attributes": {"artist": "X", "version": "Kit", "type": "mini", "release_date": "16/11/2026"}}
+    assert_error(gql(CREATE, {"input": album}), "VALIDATION_ERROR")
+    merch = {"name": "Test merch", "category": "Merch", "price_cents": 990, "tags": ["pytest"],
+             "attributes": {"artist": "X", "type": "Poster set", "pieces": 0}}
+    assert_error(gql(CREATE, {"input": merch}), "VALIDATION_ERROR")

@@ -67,6 +67,9 @@ class ReservationResult(BaseModel):
     order_id: int
     reservations: list[Reservation]
 
+class WarehouseName(BaseModel):
+    id: int
+    name: str
 
 #  Entrepôts 
 class Warehouse(BaseModel):

@@ -36,13 +36,13 @@ dbm.createCollection("catalog", {
         byCategory("Album", ["artist", "version", "type", "release_date"], {
           artist: str, version: str,
           type: { enum: ["studio", "mini", "single", "mixtape", "anthology"] },
-          release_date: str, photocards: int(0), limited_edition: { bsonType: "bool" }
+          release_date: { bsonType: "string", pattern: "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$" }, photocards: int(0), limited_edition: { bsonType: "bool" }
         }),
         byCategory("Lightstick", ["artist", "version"], {
           artist: str, version: str, bluetooth: { bsonType: "bool" }, piles: str
         }),
         byCategory("Merch", ["artist", "type"], {
-          artist: str, type: str, size: strArray, couleur: strArray, matiere: str
+          artist: str, type: str, size: strArray, couleur: strArray, matiere: str,format: str, pieces: int(1)
         }),
         byCategory("Drama", ["serie", "support"], {
           serie: str, saison: int(1), episodes: int(1),

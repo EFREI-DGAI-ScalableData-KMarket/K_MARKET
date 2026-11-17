@@ -368,3 +368,33 @@ def test_metriques_prometheus(api):
     r = httpx.get(DIRECT.rsplit("/v1", 1)[0] + "/metrics", timeout=5)
     assert r.status_code == 200
     assert "http_requests_total" in r.text and "http_request_duration_seconds" in r.text
+
+
+#  lecture groupée, stocks bas, noms d'entrepôts
+def test_lecture_groupee(api, stocked_product, second_product):
+    unknown = new_id()
+    r = api.get("/stock", headers=token("catalog_manager"),
+                params={"product_ids": f"{second_product},{stocked_product},{unknown},{second_product}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert [s["product_id"] for s in body] == [second_product, stocked_product]     # ordre demandé, sans doublon
+    assert body[1]["total_quantity"] == total_stock(api, stocked_product)
+    assert_error(api.get("/stock", headers=SERVICE, params={"product_ids": "1,abc"}), 400, "BAD_REQUEST")
+    assert_error(api.get("/stock", headers=SERVICE,
+                         params={"product_ids": ",".join(map(str, range(1, 202)))}), 400, "BAD_REQUEST")
+
+
+def test_stocks_bas(api):
+    r = api.get("/stock/low", headers=token("analyst"), params={"threshold": 5, "limit": 10})
+    assert r.status_code == 200
+    totals = [s["total_quantity"] for s in r.json()]
+    assert totals and len(totals) <= 10
+    assert all(t <= 5 for t in totals) and totals == sorted(totals)            # du plus bas au plus haut
+
+
+def test_noms_des_entrepots(api):
+    r = api.get("/warehouses/names", headers=token("catalog_manager"))
+    assert r.status_code == 200
+    assert all(set(w) == {"id", "name"} for w in r.json()) and r.json()
+    assert_error(api.get("/warehouses", headers=token("catalog_manager")), 403, "FORBIDDEN")   # remplissage : non
+    assert_error(api.get("/warehouses/names", headers=SERVICE), 403, "FORBIDDEN")

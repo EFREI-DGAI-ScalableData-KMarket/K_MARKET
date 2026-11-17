@@ -14,6 +14,7 @@ info:
     | Mettre à jour le stock (PUT /stock/...)  | E     | —               | —       | E         | E               |
     | Créer le stock, Saga (reserve/commit/release) | E | —              | —       | —         | E               |
     | GET /warehouses, GET /shipments          | L     | —               | L       | L         | —               |
+    | GET /warehouses/names (id + nom)         | L     | L               | L       | L         | —               |
     | Écrire les expéditions                   | E     | —               | —       | E         | —               |
 
     Le `PUT /v1/inventory/{id}` de la matrice du sujet correspond ici à
@@ -65,6 +66,29 @@ paths:
   # STOCK
   # 
   /stock:
+    get:
+      tags: [Stock]
+      summary: Lire le stock de plusieurs produits en un appel
+      description: |
+        Ordre de la demande ; les ids sans stock sont ignorés ; 200 ids maximum.
+        Rôles : admin, logistics, analyst, catalog_manager, service_account.
+      parameters:
+        - name: product_ids
+          in: query
+          required: true
+          description: Identifiants séparés par des virgules
+          schema: { type: string, example: "1,2,3" }
+      responses:
+        '200':
+          description: Stock de chaque produit trouvé
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StockSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [Stock]
       summary: Créer le stock d'un produit dans un entrepôt
@@ -95,6 +119,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+
+  /stock/low:
+    get:
+      tags: [Stock]
+      summary: Produits bientôt en rupture (stock total le plus bas)
+      description: |
+        Produits dont le stock total, tous entrepôts confondus, est inférieur ou égal à `threshold`,
+        du plus bas au plus haut. Inclut les ruptures (total 0) ; le service Stock ne connaît pas le statut
+        catalogue : un produit archivé (stock 0) y figure aussi, à filtrer avec le catalogue (`productsByIds`).
+        Rôles : admin, logistics, analyst, catalog_manager, service_account.
+      parameters:
+        - name: threshold
+          in: query
+          schema: { type: integer, minimum: 0, default: 10 }
+        - $ref: '#/components/parameters/LowLimit'
+      responses:
+        '200':
+          description: Produits, du stock le plus bas au plus haut
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StockSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /stock/{product_id}:
     get:
@@ -250,6 +300,25 @@ paths:
   # 
   # WAREHOUSES
   # 
+  /warehouses/names:
+    get:
+      tags: [Warehouses]
+      summary: Identifiant et nom des entrepôts (listes de choix)
+      description: |
+        Pour le formulaire du catalogue (stock initial). Ne donne pas le remplissage,
+        qui reste réservé à GET /warehouses (matrice du sujet).
+        Rôles : admin, logistics, analyst, catalog_manager.
+      responses:
+        '200':
+          description: Entrepôts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WarehouseName' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /warehouses:
     get:
       tags: [Warehouses]
@@ -385,6 +454,10 @@ components:
       name: limit
       in: query
       schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+    LowLimit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
     Offset:
       name: offset
       in: query
@@ -517,6 +590,12 @@ components:
                   available: { type: integer, description: Plus grande quantité disponible dans un seul entrepôt }
 
     #  Entrepôts 
+    WarehouseName:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+
     Warehouse:
       type: object
       properties:

@@ -1,14 +1,14 @@
 """Routes du service Stock — contrat : contracts/inventory.openapi.yaml (monté sous /v1)."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.security import require_roles
 from app.repositories.stock import StockRepository
 from app.schemas.stock import (
     OrderRef, ReleaseRequest, ReservationResult, ReserveRequest,
     Shipment, ShipmentCreate, ShipmentPage, ShipmentStatus, ShipmentStatusUpdate,
-    StockCreate, StockItem, StockSummary, StockUpdate, Warehouse,
+    StockCreate, StockItem, StockSummary, StockUpdate, Warehouse,WarehouseName
 )
 
 router = APIRouter()
@@ -20,13 +20,29 @@ UPDATE = Depends(require_roles("admin", "logistics", "service_account"))        
 WAREHOUSES = Depends(require_roles("admin", "logistics", "analyst"))                            # GET /warehouses
 SHIPMENTS_READ = Depends(require_roles("admin", "logistics", "analyst"))
 LOGISTICS = Depends(require_roles("admin", "logistics"))                                        # écrire les expéditions
-
+WAREHOUSE_NAMES = Depends(require_roles("admin", "logistics", "analyst", "catalog_manager"))    # id + nom seulement
 
 # - STOCK
 @router.post("/stock", status_code=201, response_model=StockItem, dependencies=[SERVICE])
 def create_stock(body: StockCreate):
     return repo.create_initial_stock(body.product_id, body.warehouse_id, body.quantity)
 
+
+@router.get("/stock", response_model=list[StockSummary], dependencies=[READ])
+def get_stocks(product_ids: str = Query(..., description="Identifiants séparés par des virgules, 200 maximum",
+                                        examples=["1,2,3"])):
+    try:
+        ids = [int(x) for x in product_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "product_ids : entiers séparés par des virgules")
+    if not 1 <= len(ids) <= 200:
+        raise HTTPException(400, "product_ids : entre 1 et 200 identifiants")
+    return repo.get_stock_summaries(ids)
+
+
+@router.get("/stock/low", response_model=list[StockSummary], dependencies=[READ])
+def get_low_stock(threshold: int = Query(10, ge=0), limit: int = Query(20, ge=1, le=200)):
+    return repo.get_low_stock(threshold, limit)
 
 @router.get("/stock/{product_id}", response_model=StockSummary, dependencies=[READ])
 def get_stock(product_id: int):
@@ -56,6 +72,11 @@ def commit_stock(body: OrderRef):
 @router.post("/stock/release", response_model=ReservationResult, dependencies=[SERVICE])
 def release_stock(body: ReleaseRequest):
     return {"order_id": body.order_id, "reservations": repo.release_stock(body.order_id, body.product_id)}
+
+@router.get("/warehouses/names", response_model=list[WarehouseName], dependencies=[WAREHOUSE_NAMES])
+def get_warehouse_names():
+    """Id et nom seulement (formulaire catalogue) : le remplissage reste réservé à GET /warehouses."""
+    return repo.get_warehouse_names()
 
 
 # - ENTREPÔTS

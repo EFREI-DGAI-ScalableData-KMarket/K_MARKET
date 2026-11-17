@@ -82,6 +82,7 @@ type AlbumAttributes {
   artist: String!
   version: String!
   type: AlbumType!
+  "Date de sortie au format AAAA-MM-JJ (contrôlé par le validator MongoDB)"
   release_date: String!
   photocards: Int
   limited_edition: Boolean
@@ -100,7 +101,9 @@ type MerchAttributes {
   size: [String!]
   couleur: [String!]
   matiere: String
+  "Format d'affiche (ex. A2)"
   format: String
+  "Nombre de pièces d'un lot (>= 1)"
   pieces: Int
 }
 
