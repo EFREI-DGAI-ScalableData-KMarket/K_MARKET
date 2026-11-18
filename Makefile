@@ -1,4 +1,4 @@
-.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio
+.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock 
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
@@ -73,10 +73,27 @@ share-minio:     ## Partage MinIO sur Internet via tunnel SSH, sans VPN (make sh
 	./scripts/share-minio.sh $(MODE)
 
 explain:         ## Démo EXPLAIN avant/après index (après make reseed ORDERS=500000)
-	docker compose exec -T postgres psql -U postgres -d kmarket -X < db/demo/explain.sql
+	docker compose exec -T postgres psql -U postgres -d kmarket -X < data/demo/explain.sql
 
 backup:          ## Sauvegarde PostgreSQL + MongoDB dans backups/
 	./scripts/backup.sh
 
 restore-test:    ## Restaure la dernière sauvegarde dans des bases de test et compare
 	./scripts/restore-test.sh
+
+fix-net:         ## Codespace : autorise le trafic entre conteneurs (règle iptables-legacy)
+	sudo iptables-legacy -C FORWARD -i br-+ -o br-+ -j ACCEPT 2>/dev/null || \
+	sudo iptables-legacy -I FORWARD -i br-+ -o br-+ -j ACCEPT
+
+test-stock: .env   ## Tests d'intégration du service Stock (pile lancée + seed requis)
+	@set -a && . ./.env && set +a && python -m pytest services/stock-service/tests -v -p no:cacheprovider
+
+
+test-catalog: .env   ## Tests d'intégration du service Catalogue (pile lancée + seed requis)
+	@set -a && . ./.env && set +a && python -m pytest services/catalog-service/tests -v -p no:cacheprovider
+
+kafka-tail:      ## Événements Kafka en direct (make kafka-tail TOPIC=inventory.shipment-status-changed)
+	docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+	  --topic $(or $(TOPIC),inventory.stock-changed) --from-beginning --property print.key=true
+traffic: .env    ## Trafic de démo vers la gateway (make traffic DURATION=300 RPS=10)
+	@set -a && . ./.env && set +a && python scripts/traffic.py --duration $(or $(DURATION),120) --rps $(or $(RPS),10)

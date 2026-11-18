@@ -1,0 +1,26 @@
+# Prometheus : lit /metrics de chaque composant toutes les 5 s (exigence du sujet).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s      # règles d'alerte évaluées toutes les 5 s : panne -> alerte en moins de 10 s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: stock-service
+    static_configs: [{ targets: ["stock-service:8002"] }]
+
+  - job_name: catalog-service
+    static_configs: [{ targets: ["catalog-service:8004"] }]
+
+  - job_name: gateway                    # Traefik : métriques sur son entrypoint interne (:8080)
+    static_configs: [{ targets: ["gateway:8080"] }]
+
+  - job_name: stock-outbox-relay         # profil "stream" : DOWN si le streaming n'est pas lancé
+    static_configs: [{ targets: ["stock-outbox-relay:9100"] }]
+
+  - job_name: prometheus
+    static_configs: [{ targets: ["localhost:9090"] }]
+
+  - job_name: kafka                      # kafka-exporter (profil "stream") : DOWN si le streaming n'est pas lancé
+    static_configs: [{ targets: ["kafka-exporter:9308"] }]

@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+strawberry-graphql[fastapi]
+pymongo
+pydantic-settings
+pytest
+PyJWT
+httpx
+prometheus-fastapi-instrumentator

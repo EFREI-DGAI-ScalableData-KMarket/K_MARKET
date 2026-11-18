@@ -17,6 +17,7 @@ import os
 import random
 import sys
 import uuid
+import time
 from datetime import datetime, timedelta, timezone
 from itertools import accumulate
 from pathlib import Path
@@ -32,9 +33,9 @@ PAYMENT_LIMIT_CENTS = 20_000
 BATCH_ORDERS = 20_000          # commandes insérées par lot (mémoire constante)
 SHOWCASE_FILE = Path(__file__).with_name("showcase.json")
 
-# --------------------------------------------------------------------------------------
+
 # Référentiels (groupes, séries, marques : fictifs ; la vitrine réelle est dans showcase.json)
-# --------------------------------------------------------------------------------------
+
 GROUPS = [
     "NOVA9", "LUNARIA", "STELLARBOYS", "MOONLIT", "ECLIPSE7", "HALOGIRLS",
     "AURORA", "KINETIC", "BLOOMY", "NEONCREW", "SEOULSTAR", "VELVETINE",
@@ -64,7 +65,7 @@ DRAMAS = [
     ("Hanok Diaries", "tranche de vie"), ("Love in Gangnam", "romance"), ("Neon Detectives", "thriller"),
     ("Spring at Gyeongju", "romance"), ("The Idol Code", "comédie"), ("Winter Palace", "historique"),
 ]
-DRAMA_SUPPORTS = [("DVD", 2490, 3490), ("Blu-ray", 2990, 4490), ("Coffret", 5990, 8990), ("Artbook", 2490, 3990)]
+DRAMA_SUPPORTS = [("DVD", 2490, 3490), ("Blu_ray", 2990, 4490), ("Coffret", 5990, 8990), ("Artbook", 2490, 3990)]
 
 BEAUTY_BRANDS = ["Hanbit Skin", "Seoul Glow", "Jeju Dew", "Moonbeam Lab", "Bori Beauty", "Cherry Hanok"]
 BEAUTY_TYPES = [  # (type, contenances possibles en ml, prix min, prix max)
@@ -114,7 +115,7 @@ WAREHOUSES = [
 PG_TABLES = [
     "orders.order_items", "orders.idempotency_keys", "orders.orders", "orders.customers",
     "payments.payments",
-    "inventory.reservations", "inventory.shipments", "inventory.stock", "inventory.warehouses",
+    "inventory.reservations", "inventory.shipments", "inventory.stock", "inventory.warehouses","inventory.outbox",
     "auth.refresh_tokens", "auth.api_keys", "auth.user_roles", "auth.users",  # auth.roles : référence, jamais vidée
 ]
 SERIAL_TABLES = [
@@ -124,9 +125,9 @@ SERIAL_TABLES = [
 ]
 
 
-# --------------------------------------------------------------------------------------
+
 # Paramètres
-# --------------------------------------------------------------------------------------
+
 def parse_args():
     p = argparse.ArgumentParser(description="Génère l'historique KMarket (PostgreSQL + MongoDB)")
     p.add_argument("--pg-dsn", default=os.getenv("PG_DSN"),
@@ -157,9 +158,9 @@ def require_env(name):
     return value
 
 
-# --------------------------------------------------------------------------------------
+
 # Petits utilitaires
-# --------------------------------------------------------------------------------------
+
 def psych(price):
     """Prix psychologique : finit par 90 centimes."""
     return (price // 100) * 100 + 90
@@ -184,9 +185,9 @@ def before_now(ts, now, margin_minutes=1):
     return min(ts, now - timedelta(minutes=margin_minutes))
 
 
-# --------------------------------------------------------------------------------------
+
 # Catalogue (MongoDB)
-# --------------------------------------------------------------------------------------
+
 def build_catalog(n_total, fake, now, showcase):
     """Retourne (produits, poids de popularité, groupe par produit, groupe en comeback)."""
     groups = GROUPS[:]
@@ -294,9 +295,9 @@ def build_catalog(n_total, fake, now, showcase):
     return products, weight, group_of, comeback_group
 
 
-# --------------------------------------------------------------------------------------
+
 # Entrepôts et stock (PostgreSQL inventory)
-# --------------------------------------------------------------------------------------
+
 def build_warehouses(n, fake):
     rows = []
     used = {w[0] for w in WAREHOUSES}
@@ -346,9 +347,9 @@ def build_stock(products, warehouses, now):
     return rows
 
 
-# --------------------------------------------------------------------------------------
+
 # Commandes, paiements, réservations, livraisons
-# --------------------------------------------------------------------------------------
+
 def status_for_age(age):
     """Statut cohérent avec l'âge de la commande (décision D2)."""
     if age < timedelta(minutes=10):
@@ -474,9 +475,9 @@ def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
     return order_row, items, payments, reservations, shipments,idem_keys, item_id, res_id, pay_id, ship_id
 
 
-# --------------------------------------------------------------------------------------
+
 # Comptes internes (auth)
-# --------------------------------------------------------------------------------------
+
 def build_auth(args, fake, now, demo_password, role_id):
     """role_id : {nom: id}, lu dans auth.roles (créée par 05_auth.sql)."""
 
@@ -499,9 +500,9 @@ def build_auth(args, fake, now, demo_password, role_id):
     return user_rows, user_role_rows, api_key_rows
 
 
-# --------------------------------------------------------------------------------------
+
 # Écriture
-# --------------------------------------------------------------------------------------
+
 def already_seeded(cur, catalog):
     cur.execute("SELECT EXISTS (SELECT 1 FROM orders.customers)")
     return cur.fetchone()[0] or catalog.estimated_document_count() > 0
@@ -513,6 +514,18 @@ def sync_sequences(cur):
         cur.execute(f"SELECT setval(pg_get_serial_sequence(%s, 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) "
                     f"FROM {table}", (table,))
 
+def connect_pg(dsn, retries=10, delay=3):
+    """Connexion PostgreSQL avec retry (le serveur ou le réseau Docker peuvent être lents)."""
+    for attempt in range(1, retries + 1):
+        try:
+            return psycopg2.connect(dsn, connect_timeout=5)
+        except psycopg2.OperationalError as e:
+            if attempt == retries:
+                raise
+            reason = str(e).strip().splitlines()[0]
+            print(f"PostgreSQL pas prêt ({attempt}/{retries}) : {reason} — nouvelle tentative dans {delay}s...",
+                  flush=True)
+            time.sleep(delay)
 
 def main():
     args = parse_args()
@@ -523,9 +536,9 @@ def main():
     now = datetime.now(timezone.utc)
     showcase = json.loads(SHOWCASE_FILE.read_text(encoding="utf-8"))
 
-    mongo = MongoClient(args.mongo_uri)
+    mongo = MongoClient(args.mongo_uri, serverSelectionTimeoutMS=10_000)
     catalog = mongo[args.mongo_db]["catalog"]
-    conn = psycopg2.connect(args.pg_dsn)
+    conn = connect_pg(args.pg_dsn)
 
     try:
         with conn.cursor() as cur:
@@ -615,6 +628,7 @@ def main():
                 status_count[o["status"]] = status_count.get(o["status"], 0) + 1
                 if len(buf["o"]) >= BATCH_ORDERS:
                     flush()
+            print(f"  ... {counts['orders']:>8} commandes insérées", flush=True)
             flush()
             sync_sequences(cur)
 

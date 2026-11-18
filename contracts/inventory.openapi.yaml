@@ -1,28 +1,49 @@
 openapi: 3.0.3
 info:
-  title: Market — Service Stock (Inventory)
+  title: KMarket — Service Stock (Inventory)
   version: v1
   description: |
-    API REST du service Stock. Gère les entrepôts, les quantités, les réservations
-    et les expéditions. Toutes les routes sont préfixées par /v1.
-    Rôles autorisés : inventory_svc (interne), logistics, admin.
+    API REST du service Stock : entrepôts, quantités, réservations (Saga) et expéditions.
+    Toutes les routes sont préfixées par /v1. Exposé par la gateway sur http://localhost:8000/v1.
+
+    Rôles applicatifs (claim `roles` du JWT, voir auth.openapi.yaml), selon la matrice des droits du sujet :
+
+    | Action                                   | admin | catalog_manager | analyst | logistics | service_account |
+    ||-|--||--|--|
+    | Lire le stock (GET /stock/...)           | L     | L               | L       | L         | L               |
+    | Mettre à jour le stock (PUT /stock/...)  | E     | —               | —       | E         | E               |
+    | Créer le stock, Saga (reserve/commit/release) | E | —              | —       | —         | E               |
+    | GET /warehouses, GET /shipments          | L     | —               | L       | L         | —               |
+    | GET /warehouses/names (id + nom)         | L     | L               | L       | L         | —               |
+    | Écrire les expéditions                   | E     | —               | —       | E         | —               |
+
+    Le `PUT /v1/inventory/{id}` de la matrice du sujet correspond ici à
+    `PUT /v1/stock/{product_id}/warehouses/{warehouse_id}` (le stock est tenu par produit et par entrepôt).
+    Chaque refus (401, 403) est journalisé : date, utilisateur, rôles, action.
+
+    Erreurs : toutes les réponses 4xx du service utilisent le schéma `Error`.
+    Limitation d'appels (gateway) : au-delà de 50 requêtes/s en moyenne par adresse IP (pointes à 100),
+    la gateway répond 429 Too Many Requests sans transmettre l'appel au service.
 servers:
-  - url: http://localhost:8002/v1
-    description: Développement local
-  - url: http://inventory-api:8002/v1
-    description: Réseau Docker
+  - url: http://localhost:8000/v1
+    description: Via la gateway
+  - url: http://stock-service:8002/v1
+    description: Réseau Docker (appels entre services)
 
 tags:
   - name: Health
     description: Santé du service
   - name: Stock
-    description: Consultation et mise à jour des stocks
+    description: Consultation et création du stock
   - name: Reservations
-    description: Réservation et libération de stock (Saga)
+    description: Réservation, confirmation et libération de stock (Saga)
   - name: Warehouses
     description: Entrepôts et taux de remplissage
   - name: Shipments
     description: Expéditions
+
+security:
+  - bearerAuth: []
 
 paths:
   /health:
@@ -41,20 +62,97 @@ paths:
                   status: { type: string, example: ok }
                   version: { type: string, example: v1 }
 
-  # ------------------------------------------------------------------
+  # 
   # STOCK
-  # ------------------------------------------------------------------
+  # 
+  /stock:
+    get:
+      tags: [Stock]
+      summary: Lire le stock de plusieurs produits en un appel
+      description: |
+        Ordre de la demande ; les ids sans stock sont ignorés ; 200 ids maximum.
+        Rôles : admin, logistics, analyst, catalog_manager, service_account.
+      parameters:
+        - name: product_ids
+          in: query
+          required: true
+          description: Identifiants séparés par des virgules
+          schema: { type: string, example: "1,2,3" }
+      responses:
+        '200':
+          description: Stock de chaque produit trouvé
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StockSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Stock]
+      summary: Créer le stock d'un produit dans un entrepôt
+      description: |
+        Appelé par le service Catalogue après la création d'un produit.
+        Rôles : service_account, admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StockCreate' }
+      responses:
+        '201':
+          description: Stock créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Entrepôt inexistant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Stock déjà existant pour ce produit dans cet entrepôt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /stock/low:
+    get:
+      tags: [Stock]
+      summary: Produits bientôt en rupture (stock total le plus bas)
+      description: |
+        Produits dont le stock total, tous entrepôts confondus, est inférieur ou égal à `threshold`,
+        du plus bas au plus haut. Inclut les ruptures (total 0) ; le service Stock ne connaît pas le statut
+        catalogue : un produit archivé (stock 0) y figure aussi, à filtrer avec le catalogue (`productsByIds`).
+        Rôles : admin, logistics, analyst, catalog_manager, service_account.
+      parameters:
+        - name: threshold
+          in: query
+          schema: { type: integer, minimum: 0, default: 10 }
+        - $ref: '#/components/parameters/LowLimit'
+      responses:
+        '200':
+          description: Produits, du stock le plus bas au plus haut
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StockSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /stock/{product_id}:
     get:
       tags: [Stock]
-      summary: Lire le stock d'un produit (tous entrepôts confondus)
-      security:
-        - bearerAuth: []
+      summary: Stock d'un produit, total et détail par entrepôt
+      description: "Rôles : admin, logistics, analyst, catalog_manager, service_account."
       parameters:
-        - name: product_id
-          in: path
-          required: true
-          schema: { type: integer }
+        - $ref: '#/components/parameters/ProductId'
       responses:
         '200':
           description: Stock du produit
@@ -65,77 +163,66 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /stock:
-    post:
+  /stock/{product_id}/warehouses/{warehouse_id}:
+    get:
       tags: [Stock]
-      summary: Créer le stock d'un nouveau produit
+      summary: Stock d'un produit dans un entrepôt
+      description: "Rôles : admin, logistics, analyst, catalog_manager, service_account."
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+        - $ref: '#/components/parameters/WarehouseId'
+      responses:
+        '200':
+          description: Ligne de stock
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Stock]
+      summary: Fixer la quantité disponible (réapprovisionnement, inventaire)
       description: |
-        Appelé par le service Catalogue après création d'un produit (lien logique).
-        Répartit la quantité initiale sur un entrepôt par défaut.
-      security:
-        - bearerAuth: []
+        Remplace la quantité disponible par la valeur donnée (idempotent : la même valeur ne change rien).
+        La ligne doit exister (sinon 404 : la créer avec POST /stock).
+        Émet un événement `inventory.stock-changed` (reason `adjustment`) si la quantité change.
+        Rôles : admin, logistics, service_account.
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+        - $ref: '#/components/parameters/WarehouseId'
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [product_id, warehouse_id, quantity]
-              properties:
-                product_id: { type: integer, example: 101 }
-                warehouse_id: { type: integer, example: 1 }
-                quantity: { type: integer, minimum: 0, example: 100 }
+            schema: { $ref: '#/components/schemas/StockUpdate' }
       responses:
-        '201':
-          description: Stock créé
+        '200':
+          description: Ligne de stock après mise à jour
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StockItem' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409':
-          description: Stock déjà existant pour ce produit dans cet entrepôt
+        '404': { $ref: '#/components/responses/NotFound' }
 
-  /stock/{product_id}/warehouses:
-    get:
-      tags: [Stock]
-      summary: Détail du stock d'un produit par entrepôt
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: product_id
-          in: path
-          required: true
-          schema: { type: integer }
-      responses:
-        '200':
-          description: Liste des stocks par entrepôt
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/StockItem' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-
-  # ------------------------------------------------------------------
+  # 
   # RESERVATIONS (Saga)
-  # ------------------------------------------------------------------
+  # 
   /stock/reserve:
     post:
       tags: [Reservations]
-      summary: Réserver du stock pour une commande (Saga étape 2)
+      summary: Réserver le stock d'une commande (Saga, étape 2)
       description: |
-        Appelé par le service Commandes. Décrémente le stock disponible et crée
-        une réservation. Idempotent via UNIQUE (order_id, product_id, warehouse_id).
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema: { type: string, format: uuid }
+        Appelé par le service Commandes. Tout ou rien : si une ligne ne peut pas être servie,
+        rien n'est réservé (une seule transaction).
+        Le service choisit l'entrepôt : chaque produit est servi par un seul entrepôt, celui qui en a
+        le plus. Deux lignes du même produit sont fusionnées (une réservation par produit).
+
+        Idempotent par `order_id` : si la commande a déjà des réservations (quel que soit leur statut),
+        rien n'est décrémenté et elles sont renvoyées telles quelles, avec le même code 201.
+        Rôles : service_account, admin.
       requestBody:
         required: true
         content:
@@ -143,54 +230,100 @@ paths:
             schema: { $ref: '#/components/schemas/ReserveRequest' }
       responses:
         '201':
-          description: Stock réservé
+          description: Stock réservé (ou déjà réservé pour cette commande)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Reservation' }
+              schema: { $ref: '#/components/schemas/ReservationResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { description: Réservation déjà existante (idempotence) }
         '422':
-          description: Stock insuffisant
+          description: Stock insuffisant (rien n'a été réservé)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InsufficientStockError' }
 
-  /stock/release:
+  /stock/commit:
     post:
       tags: [Reservations]
-      summary: Libérer une réservation (compensation Saga)
+      summary: Confirmer les réservations d'une commande payée (Saga, après paiement)
       description: |
-        Appelé par le service Commandes si le paiement échoue.
-        Remet le stock en disponible et passe la réservation à `released`.
-      security:
-        - bearerAuth: []
+        Appelé par le service Commandes quand le paiement réussit.
+        Passe les réservations `reserved` à `committed` (le stock a déjà été décrémenté au /reserve).
+        Idempotent : des réservations déjà `committed` sont renvoyées telles quelles.
+        Rôles : service_account, admin.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [order_id]
-              properties:
-                order_id: { type: integer, example: 1234 }
+            schema: { $ref: '#/components/schemas/OrderRef' }
       responses:
         '200':
-          description: Réservation libérée
+          description: Réservations confirmées
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Réservations déjà libérées (released), impossible de confirmer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /stock/release:
+    post:
+      tags: [Reservations]
+      summary: Libérer les réservations d'une commande (compensation Saga)
+      description: |
+        Appelé par le service Commandes si le paiement échoue ou si la commande est annulée.
+        Remet le stock en disponible et passe les réservations à `released`.
+        Sans `product_id` : toute la commande. Avec `product_id` : cette ligne seulement.
+        Idempotent : des réservations déjà `released` ne rendent pas le stock deux fois.
+        Rôles : service_account, admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReleaseRequest' }
+      responses:
+        '200':
+          description: Réservations libérées
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationResult' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  # ------------------------------------------------------------------
+  # 
   # WAREHOUSES
-  # ------------------------------------------------------------------
+  # 
+  /warehouses/names:
+    get:
+      tags: [Warehouses]
+      summary: Identifiant et nom des entrepôts (listes de choix)
+      description: |
+        Pour le formulaire du catalogue (stock initial). Ne donne pas le remplissage,
+        qui reste réservé à GET /warehouses (matrice du sujet).
+        Rôles : admin, logistics, analyst, catalog_manager.
+      responses:
+        '200':
+          description: Entrepôts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WarehouseName' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /warehouses:
     get:
       tags: [Warehouses]
       summary: Lister les entrepôts et leur taux de remplissage
-      security:
-        - bearerAuth: []
+      description: "Rôles : admin, logistics, analyst."
       responses:
         '200':
           description: Liste des entrepôts
@@ -202,36 +335,14 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
-  /warehouses/{warehouse_id}:
-    get:
-      tags: [Warehouses]
-      summary: Détail d'un entrepôt
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: warehouse_id
-          in: path
-          required: true
-          schema: { type: integer }
-      responses:
-        '200':
-          description: Détail de l'entrepôt
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Warehouse' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  # ------------------------------------------------------------------
+  # 
   # SHIPMENTS
-  # ------------------------------------------------------------------
+  # 
   /shipments:
     get:
       tags: [Shipments]
-      summary: Lister les expéditions (filtrable par entrepôt ou statut)
-      security:
-        - bearerAuth: []
+      summary: Lister les expéditions (filtres + pagination)
+      description: "Rôles : admin, logistics, analyst."
       parameters:
         - name: warehouse_id
           in: query
@@ -239,55 +350,58 @@ paths:
         - name: status
           in: query
           schema: { $ref: '#/components/schemas/ShipmentStatus' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
-          description: Liste des expéditions
+          description: Page d'expéditions, les plus récentes d'abord
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Shipment' }
+              schema: { $ref: '#/components/schemas/ShipmentPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
-  /shipments/{order_id}:
     post:
       tags: [Shipments]
-      summary: Créer une expédition pour une commande
-      description: Appelé par la logistique quand la commande passe en `preparing`.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: order_id
-          in: path
-          required: true
-          schema: { type: integer }
+      summary: Créer l'expédition d'une commande
+      description: |
+        Appelé par la logistique quand la commande passe en `preparing`.
+        Le service Stock ne modifie pas le statut de la commande (données du service Commandes).
+        Rôles : logistics, admin.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [warehouse_id]
-              properties:
-                warehouse_id: { type: integer, example: 1 }
+            schema: { $ref: '#/components/schemas/ShipmentCreate' }
       responses:
         '201':
-          description: Expédition créée
+          description: Expédition créée (statut `preparing`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Shipment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: Expédition déjà existante pour cette commande }
+        '404':
+          description: Entrepôt inexistant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Expédition déjà existante pour cette commande
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /shipments/{shipment_id}/status:
     patch:
       tags: [Shipments]
-      summary: Mettre à jour le statut d'une expédition
-      security:
-        - bearerAuth: []
+      summary: Faire avancer le statut d'une expédition
+      description: |
+        Transitions autorisées : preparing → shipped → delivered (pas de retour arrière).
+        Renseigne `shipped_at` ou `delivered_at`.
+        Rôles : logistics, admin.
       parameters:
         - name: shipment_id
           in: path
@@ -304,11 +418,19 @@ paths:
                 status: { $ref: '#/components/schemas/ShipmentStatus' }
       responses:
         '200':
-          description: Statut mis à jour
+          description: Expédition mise à jour
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Shipment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: Transition de statut invalide }
+        '409':
+          description: Transition de statut invalide
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
 components:
   securitySchemes:
@@ -317,36 +439,75 @@ components:
       scheme: bearer
       bearerFormat: JWT
 
+  parameters:
+    ProductId:
+      name: product_id
+      in: path
+      required: true
+      schema: { type: integer }
+    WarehouseId:
+      name: warehouse_id
+      in: path
+      required: true
+      schema: { type: integer }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+    LowLimit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, default: 0, minimum: 0 }
+
   responses:
+    BadRequest:
+      description: Requête invalide (corps, paramètres ou types)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
     Unauthorized:
-      description: Jeton absent, invalide ou expiré (401)
+      description: Jeton absent, invalide ou expiré
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
-      description: Rôle insuffisant (403)
+      description: Rôle insuffisant
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     NotFound:
-      description: Ressource introuvable (404)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    BadRequest:
-      description: Requête invalide (400)
+      description: Ressource introuvable
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
+    #  Stock 
+    StockCreate:
+      type: object
+      required: [product_id, warehouse_id, quantity]
+      properties:
+        product_id: { type: integer, example: 301 }
+        warehouse_id: { type: integer, example: 1 }
+        quantity: { type: integer, minimum: 0, example: 100 }
+
+    StockUpdate:
+      type: object
+      required: [quantity]
+      properties:
+        quantity: { type: integer, minimum: 0, example: 250, description: Nouvelle quantité disponible (valeur absolue) }
+
     StockItem:
       type: object
       properties:
         product_id: { type: integer }
         warehouse_id: { type: integer }
         warehouse_name: { type: string }
-        quantity: { type: integer, minimum: 0 }
+        quantity: { type: integer, minimum: 0, description: Quantité disponible (hors réservations) }
         updated_at: { type: string, format: date-time }
 
     StockSummary:
@@ -358,18 +519,12 @@ components:
           type: array
           items: { $ref: '#/components/schemas/StockItem' }
 
-    Reservation:
+    #  Réservations 
+    OrderRef:
       type: object
+      required: [order_id]
       properties:
-        id: { type: integer }
-        order_id: { type: integer }
-        product_id: { type: integer }
-        warehouse_id: { type: integer }
-        quantity: { type: integer }
-        status:
-          type: string
-          enum: [reserved, committed, released]
-        created_at: { type: string, format: date-time }
+        order_id: { type: integer, example: 1234 }
 
     ReserveRequest:
       type: object
@@ -386,6 +541,40 @@ components:
               product_id: { type: integer, example: 101 }
               quantity: { type: integer, minimum: 1, example: 2 }
 
+    ReleaseRequest:
+      type: object
+      required: [order_id]
+      properties:
+        order_id: { type: integer, example: 1234 }
+        product_id:
+          type: integer
+          nullable: true
+          description: Optionnel ; absent = toute la commande
+
+    ReservationStatus:
+      type: string
+      enum: [reserved, committed, released]
+
+    Reservation:
+      type: object
+      properties:
+        id: { type: integer }
+        order_id: { type: integer }
+        product_id: { type: integer }
+        warehouse_id: { type: integer }
+        quantity: { type: integer }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ReservationResult:
+      type: object
+      properties:
+        order_id: { type: integer }
+        reservations:
+          type: array
+          items: { $ref: '#/components/schemas/Reservation' }
+
     InsufficientStockError:
       allOf:
         - $ref: '#/components/schemas/Error'
@@ -398,7 +587,14 @@ components:
                 properties:
                   product_id: { type: integer }
                   requested: { type: integer }
-                  available: { type: integer }
+                  available: { type: integer, description: Plus grande quantité disponible dans un seul entrepôt }
+
+    #  Entrepôts 
+    WarehouseName:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
 
     Warehouse:
       type: object
@@ -406,7 +602,7 @@ components:
         id: { type: integer }
         name: { type: string }
         capacity_units: { type: integer }
-        used_units: { type: integer }
+        used_units: { type: integer, description: SUM(stock.quantity) de l'entrepôt }
         fill_rate:
           type: number
           format: float
@@ -417,9 +613,17 @@ components:
           enum: [normal, near_full]
           description: near_full si fill_rate > 0.90
 
+    #  Expéditions 
     ShipmentStatus:
       type: string
       enum: [preparing, shipped, delivered]
+
+    ShipmentCreate:
+      type: object
+      required: [order_id, warehouse_id]
+      properties:
+        order_id: { type: integer, example: 1234 }
+        warehouse_id: { type: integer, example: 1 }
 
     Shipment:
       type: object
@@ -432,9 +636,22 @@ components:
         shipped_at: { type: string, format: date-time, nullable: true }
         delivered_at: { type: string, format: date-time, nullable: true }
 
-    Error:
+    ShipmentPage:
       type: object
       properties:
-        code: { type: string, example: INSUFFICIENT_STOCK }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Shipment' }
+        total: { type: integer }
+
+    #  Erreurs 
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [BAD_REQUEST, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, INSUFFICIENT_STOCK, INTERNAL_ERROR]
+          example: INSUFFICIENT_STOCK
         message: { type: string }
         request_id: { type: string, format: uuid }

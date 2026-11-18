@@ -1,0 +1,24 @@
+# Configuration statique de Traefik (lue au démarrage).
+# Les routes sont dans dynamic/ (rechargées à chaud, sans redémarrer).
+
+entryPoints:
+  web:
+    address: ":8000"          
+
+api:
+  dashboard: true
+  insecure: true              
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+log:
+  level: INFO
+
+accessLog: {}
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true                

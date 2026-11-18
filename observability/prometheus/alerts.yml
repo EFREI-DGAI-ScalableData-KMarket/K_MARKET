@@ -1,0 +1,55 @@
+groups:
+  - name: kmarket
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"stock-service|catalog-service|gateway"} == 0
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} ne répond plus"
+          description: "Prometheus n'arrive plus à lire /metrics de {{ $labels.job }}."
+
+      - alert: HighErrorRate
+        expr: |
+          sum by (job) (rate(http_requests_total{status="5xx"}[1m]))
+            / sum by (job) (rate(http_requests_total[1m])) > 0.05
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.job }} : plus de 5 % d'erreurs 5xx"
+
+      - alert: SlowResponses
+        expr: |
+          histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket[1m]))) > 0.5
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.job }} : p95 au-dessus de 500 ms"
+
+      - alert: OutboxBacklog
+        expr: outbox_pending_events > 100
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} événements Kafka en attente dans inventory.outbox (Kafka arrêté ?)"
+
+      - alert: KafkaDown
+        expr: up{job="kafka"} == 0 or max by (job) (kafka_brokers) < 1
+        labels: { severity: critical }
+        annotations:
+          summary: "Kafka injoignable : plus aucun événement n'est publié"
+
+      - alert: GatewayErrors
+        expr: |
+          sum(rate(traefik_entrypoint_requests_total{entrypoint="web",code=~"5.."}[1m]))
+            / sum(rate(traefik_entrypoint_requests_total{entrypoint="web"}[1m])) > 0.05
+        for: 30s
+        labels: { severity: warning, job: gateway }
+        annotations:
+          summary: "gateway : plus de 5 % de réponses 5xx"
+
+      - alert: KafkaConsumerLag
+        expr: sum by (job, consumergroup) (kafka_consumergroup_lag) > 1000
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "Kafka : {{ $labels.consumergroup }} a plus de 1 000 messages de retard"

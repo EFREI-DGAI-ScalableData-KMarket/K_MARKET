@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+psycopg[binary]
+httpx
+pyjwt
+pytest
+PyJWT
+prometheus-fastapi-instrumentator
+confluent-kafka

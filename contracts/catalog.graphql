@@ -1,16 +1,43 @@
 """
-Service Catalogue — GraphQL
-Schéma flexible : les attributs varient selon la catégorie (validator oneOf MongoDB).
-Le contrôle d'accès se fait sur chaque query et mutation (rôles RBAC).
+KMarket — Service Catalogue (GraphQL)
+
+Point d'entrée : POST /v1/catalog (via la gateway : http://localhost:8000/v1/catalog).
+Noms de champs en snake_case, comme les contrats REST.
+
+Authentification : en-tête `Authorization: Bearer <JWT>` (émis par auth-api, claim `roles`).
+- Lecture (Query) : tout rôle authentifié (admin, catalog_manager, analyst, logistics, service_account)
+- Écriture (Mutation) : catalog_manager, admin
+
+Images : GET /v1/catalog/images/{product_id}.svg (hors GraphQL, sans jeton : une balise <img>
+n'en envoie pas). Visuel généré à partir du produit (catégorie, nom, prix) ; aucun fichier stocké.
+
+Limitation d'appels (gateway) : au-delà de 50 requêtes/s en moyenne par adresse IP (pointes à 100),
+la gateway répond HTTP 429 Too Many Requests, avant même GraphQL.
+
+Erreurs : erreurs GraphQL standard ; `errors[].extensions.code` vaut une des valeurs de ErrorCode
+(la réponse HTTP reste 200, comme le veut GraphQL). Les détails éventuels sont dans
+`errors[].extensions.details` (ex. errInfo du validator MongoDB pour VALIDATION_ERROR).
+
+Schéma flexible : les attributs varient selon la catégorie (D1). En lecture, union typée
+ProductAttributes ; en écriture, JSON validé par le validator $jsonSchema (oneOf) de MongoDB.
+Les valeurs d'enum sont celles stockées en base (codes sans accent ni tiret : Beaute, Blu_ray) ;
+le front affiche les libellés (« Beauté », « Blu-ray »).
 """
 
-scalar JSON
 scalar DateTime
+scalar JSON
 
-enum ProductStatus {
-  active
-  inactive
+enum ErrorCode {
+  UNAUTHORIZED
+  FORBIDDEN
+  NOT_FOUND
+  VALIDATION_ERROR
+  CONFLICT
+  "Service Stock ou auth-api injoignable / en erreur (createProduct avec initial_stock)"
+  UPSTREAM_ERROR
 }
+
+#  enums
 
 enum Category {
   Album
@@ -19,6 +46,12 @@ enum Category {
   Drama
   Livre
   Beaute
+}
+
+"inactive = produit archivé (un produit déjà commandé ne se supprime pas)"
+enum ProductStatus {
+  active
+  inactive
 }
 
 enum AlbumType {
@@ -31,7 +64,7 @@ enum AlbumType {
 
 enum DramaSupport {
   DVD
-  Blu_ray  
+  Blu_ray
   Coffret
   Artbook
 }
@@ -42,11 +75,14 @@ enum Langue {
   ko
 }
 
+#  attributs par catégorie
+# Champs non nuls = champs obligatoires du validator MongoDB pour la catégorie.
 
 type AlbumAttributes {
   artist: String!
   version: String!
   type: AlbumType!
+  "Date de sortie au format AAAA-MM-JJ (contrôlé par le validator MongoDB)"
   release_date: String!
   photocards: Int
   limited_edition: Boolean
@@ -65,13 +101,17 @@ type MerchAttributes {
   size: [String!]
   couleur: [String!]
   matiere: String
+  "Format d'affiche (ex. A2)"
+  format: String
+  "Nombre de pièces d'un lot (>= 1)"
+  pieces: Int
 }
 
 type DramaAttributes {
   serie: String!
+  support: DramaSupport!
   saison: Int
   episodes: Int
-  support: DramaSupport!
   sous_titres: [String!]
 }
 
@@ -85,15 +125,19 @@ type LivreAttributes {
 
 type BeauteAttributes {
   marque: String!
-  type: String
   contenance_ml: Int!
+  type: String
   type_peau: String
   ingredients: [String!]
 }
 
 """
-Union des attributs possibles. Le client choisit le type concret
-selon la catégorie du produit (via __typename ou un fragment).
+Le type concret dépend de `Product.category` ; le client le lit via `__typename` ou un fragment :
+`attributes { __typename ... on AlbumAttributes { artist version } }`
+
+Attention : `type` existe dans Album (AlbumType!), Merch (String!) et Beaute (String). GraphQL refuse
+une requête qui demande ces champs de même nom mais de types différents dans plusieurs fragments ;
+il faut alors un alias : `... on AlbumAttributes { album_type: type } ... on MerchAttributes { merch_type: type }`.
 """
 union ProductAttributes =
     AlbumAttributes
@@ -103,6 +147,7 @@ union ProductAttributes =
   | LivreAttributes
   | BeauteAttributes
 
+#  produit
 
 type Product {
   product_id: Int!
@@ -113,7 +158,10 @@ type Product {
   description: String
   attributes: ProductAttributes!
   status: ProductStatus!
+  "Date de dernière écriture (création ou mise à jour)"
   indexed_at: DateTime
+  "URL de l'image (visuel SVG généré si aucune image n'est fournie)"
+  image_url: String!
 }
 
 type ProductPage {
@@ -122,76 +170,66 @@ type ProductPage {
   has_more: Boolean!
 }
 
+#  inputs
 
+"Tous les critères sont optionnels et se combinent (ET). Sans `status` : produits actifs et archivés."
 input ProductFilter {
-  category: Category
-  status: ProductStatus
-  search: String
-  min_price_cents: Int
-  max_price_cents: Int
-  limit: Int = 50
-  offset: Int = 0
+  category: Category = null
+  status: ProductStatus = null
+  "Plein texte sur name et description (index MongoDB french)"
+  search: String = null
+  min_price_cents: Int = null
+  max_price_cents: Int = null
 }
 
-"""
-Input polymorphe : le client envoie un JSON brut pour `attributes`,
-et le resolver valide côté serveur selon la catégorie (validator MongoDB).
-On ne peut pas faire un input union en GraphQL, donc JSON est le compromis.
-"""
+input InitialStock {
+  warehouse_id: Int!
+  quantity: Int!
+}
+
 input ProductInput {
   name: String!
   category: Category!
   price_cents: Int!
+  "Attributs propres à la catégorie, validés par le validator MongoDB"
+  attributes: JSON!
+  tags: [String!] = null
+  description: String = null
+}
+
+"Mise à jour partielle : seuls les champs fournis sont modifiés"
+input ProductUpdateInput {
+  name: String
+  category: Category
+  price_cents: Int
+  attributes: JSON
   tags: [String!]
   description: String
-  attributes: JSON!
 }
 
-
-enum ErrorCode {
-  UNAUTHORIZED
-  FORBIDDEN
-  NOT_FOUND
-  VALIDATION_ERROR
-  CONFLICT
-}
-
-type Error {
-  code: ErrorCode!
-  message: String!
-  request_id: String
-}
-
-union ProductResult = Product | Error
-
-
+#  opérations
 
 type Query {
-  "Lister les produits avec filtres et pagination"
-  products(filter: ProductFilter): ProductPage!
+  "Lister les produits (filtres + pagination ; tri par product_id, ou par pertinence avec `search`). limit : 1 à 200"
+  products(filter: ProductFilter = null, limit: Int! = 50, offset: Int! = 0): ProductPage!
 
-  "Lire un produit par son identifiant"
+  "Lire un produit ; null s'il n'existe pas"
   product(product_id: Int!): Product
 
-  "Rechercher des produits (plein texte, index MongoDB french)"
-  searchProducts(query: String!, limit: Int = 10): [Product!]!
-
-  "Lister les produits d'une catégorie"
-  productsByCategory(category: Category!, status: ProductStatus): [Product!]!
+  "Lire plusieurs produits en un appel (orders-api : prix des lignes de commande). Ordre de la demande ; les ids inconnus sont ignorés ; 200 ids maximum"
+  productsByIds(ids: [Int!]!): [Product!]!
 }
 
-
-
 type Mutation {
-  "Créer un produit (catalog_manager ou admin)"
-  createProduct(input: ProductInput!): ProductResult!
+  "Créer un produit (actif). Avec initial_stock : appelle POST /stock du service Stock ; si cet appel échoue, le produit est supprimé (compensation)"
+  createProduct(input: ProductInput!, initial_stock: InitialStock = null): Product!
 
-  "Mettre à jour un produit (catalog_manager ou admin)"
-  updateProduct(product_id: Int!, input: ProductInput!): ProductResult!
+  "Mettre à jour un produit (partiel : seuls les champs fournis changent)"
+  updateProduct(product_id: Int!, input: ProductUpdateInput!): Product!
 
-  "Archiver un produit (au lieu de le supprimer)"
-  archiveProduct(product_id: Int!): ProductResult!
+  "Archiver un produit (status inactive) : on ne supprime pas un produit déjà commandé"
+  archiveProduct(product_id: Int!): Product!
 
   "Réactiver un produit archivé"
-  reactivateProduct(product_id: Int!): ProductResult!
+  reactivateProduct(product_id: Int!): Product!
 }

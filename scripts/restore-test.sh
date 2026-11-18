@@ -49,7 +49,9 @@ echo "Sauvegarde testée : $SRC"
 
 # --- PostgreSQL : restauration dans une base vierge ---
 $PSQL -d postgres -c "DROP DATABASE IF EXISTS kmarket_restore" -c "CREATE DATABASE kmarket_restore"
-$DC postgres pg_restore -U postgres -d kmarket_restore --exit-on-error < "$SRC/kmarket.pgdump"
+$DC postgres pg_restore -f - < "$SRC/kmarket.pgdump" \
+  | grep -v 'SET (pg_attver=' \
+  | $PSQL -d kmarket_restore > /dev/null
 
 # --- MongoDB : restauration sous un autre nom de base ---
 $DC mongo sh -c 'mongorestore --quiet -u root -p "$MONGO_INITDB_ROOT_PASSWORD" \

@@ -1,0 +1,64 @@
+# Routes de la gateway : chemin public -> service interne.
+# Les services gardent le préfixe /v1 : aucune réécriture d'URL.
+
+http:
+  middlewares:
+    # Limitation du nombre d'appels, par adresse IP : 50 requêtes/s en moyenne, pointes jusqu'à 100.
+    # Au-delà : 429 Too Many Requests, renvoyé par la gateway sans atteindre le service.
+    rate-limit:
+      rateLimit:
+        average: 50
+        period: 1s
+        burst: 100
+
+    prometheus-api:
+      replacePathRegex:
+        regex: "^/v1/metrics/(query|alerts)$"
+        replacement: "/api/v1/$1"  
+
+  routers:
+    stock:
+      rule: "PathPrefix(`/v1/stock`) || PathPrefix(`/v1/warehouses`) || PathPrefix(`/v1/shipments`)"
+      entryPoints: [web]
+      middlewares: [rate-limit]
+      service: stock
+
+    catalog:
+      rule: "PathPrefix(`/v1/catalog`)"
+      entryPoints: [web]
+      middlewares: [rate-limit]
+      service: catalog
+
+    ui:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      entryPoints:
+        - web         
+      service: ui
+
+    metrics:
+      rule: "(Path(`/v1/metrics/query`) || Path(`/v1/metrics/alerts`)) && Method(`GET`)"
+      entryPoints: [web]
+      middlewares: [rate-limit, prometheus-api]
+      service: prometheus
+
+  services:
+    stock:
+      loadBalancer:
+        servers:
+          - url: "http://stock-service:8002"
+
+    catalog:
+      loadBalancer:
+        servers:
+          - url: "http://catalog-service:8004"
+
+    ui:
+      loadBalancer:
+        servers:
+          - url: "http://ui:80"
+
+    prometheus:
+      loadBalancer:
+        servers:
+          - url: "http://prometheus:9090"
