@@ -50,6 +50,8 @@ public class AuthController {
         if (authentication == null || authentication.getName() == null) {
             throw ApiException.unauthorized("Authentication required");
         }
+        //Assure the token is from non-tech-service account -> forbidden
+        rejectServiceAccounts(authentication);
         authService.logout(Integer.valueOf(authentication.getName()));
     }
 
@@ -58,8 +60,18 @@ public class AuthController {
         if (authentication == null || authentication.getName() == null) {
             throw ApiException.unauthorized("Authentication required");
         }
+        //Assure the token is from non-tech-service account -> forbidden
+        rejectServiceAccounts(authentication);
         User user = authService.getById(Integer.valueOf(authentication.getName()));
         return UserResponse.from(user);
+    }
+
+    private void rejectServiceAccounts(Authentication authentication) {
+        boolean isServiceAccount = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_service_account".equals(a.getAuthority()));
+        if (isServiceAccount) {
+            throw ApiException.forbidden("Service accounts cannot use this endpoint");
+        }
     }
 }
 

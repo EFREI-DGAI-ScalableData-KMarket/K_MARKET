@@ -24,8 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 /** Account creation and login use-cases on top of the {@code auth} schema. */
 @Slf4j
@@ -49,7 +47,11 @@ public class AuthService {
             throw ApiException.conflict("Email already in use: " + email);
         }
 
-        List<Role> roles = roleRepository.findAllById(request.role_ids());
+        List<Integer> requestedRoleIds = request.role_ids().stream().distinct().toList();
+        List<Role> roles = roleRepository.findAllById(requestedRoleIds);
+        if (roles.size() != requestedRoleIds.size()) {
+            throw ApiException.badRequest("Unknown role_ids in request");
+        }
 
         User user = new User();
         user.setEmail(email);
@@ -70,21 +72,7 @@ public class AuthService {
             log.error("Failed to create user: email={} - Data integrity violation",
                     user.getEmail(), e);
 
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "User already exists or violates database constraints",
-                    e
-            );
-
-        } catch (Exception e) {
-            log.error("Unexpected error while creating user: username={}",
-                    user.getEmail(), e);
-
-            throw new ResponseStatusException(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Failed to create user",
-                    e
-            );
+            throw ApiException.conflict("User already exists or violates database constraints");
         }
     }
 
