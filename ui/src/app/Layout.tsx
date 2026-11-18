@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { getEmail, getRoles, getSubject, logout } from '../auth/auth';
 import { alertKey, useFiringAlerts } from '../features/observability/api';
+import { Logo } from '../ui/Logo';
 import { Toast, type ToastData } from '../ui/ui';
 import { useTheme } from './theme';
 
@@ -68,9 +69,12 @@ export function Layout() {
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="flex flex-col gap-5 border-b border-line bg-surface px-4 py-5 md:sticky md:top-0 md:h-screen md:w-[248px] md:shrink-0 md:gap-8 md:border-b-0 md:border-r md:py-6">
-        <div className="flex items-baseline gap-2 px-2.5">
-          <span className="text-[22px] font-extrabold tracking-tight">KMarket</span>
-          <span lang="ko" className="text-xs text-muted">케이마켓</span>
+        <div className="flex items-center gap-2.5 px-2.5">
+          <Logo className="size-8 shrink-0" />
+          <div className="flex items-baseline gap-2">
+            <span className="text-[22px] font-extrabold tracking-tight">KMarket</span>
+            <span lang="ko" className="text-xs text-muted">케이마켓</span>
+          </div>
         </div>
 
         <nav aria-label="Onglets" className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
