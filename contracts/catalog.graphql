@@ -5,8 +5,14 @@ Point d'entrée : POST /v1/catalog (via la gateway : http://localhost:8000/v1/ca
 Noms de champs en snake_case, comme les contrats REST.
 
 Authentification : en-tête `Authorization: Bearer <JWT>` (émis par auth-api, claim `roles`).
-- Lecture (Query) : tout rôle authentifié (admin, catalog_manager, analyst, logistics, service_account)
-- Écriture (Mutation) : catalog_manager, admin
+Le contrôle est fait sur chaque query et chaque mutation.
+- Lecture (Query) : publique (décision D8). Sans jeton, ou avec le rôle customer : produits actifs
+  seulement (le filtre `status` est ignoré, un produit archivé vaut null et n'apparaît pas dans
+  productsByIds). L'équipe (admin, catalog_manager, analyst, logistics) et service_account voient
+  tout le catalogue. Un jeton fourni doit être valide : sinon UNAUTHORIZED.
+- Écriture (Mutation) : catalog_manager, admin. Sans jeton : UNAUTHORIZED ; autre rôle : FORBIDDEN.
+À la gateway, le contrôle du jeton sur /v1/catalog est « optionnel » : sans jeton la requête passe,
+avec un jeton invalide elle est refusée (401).
 
 Images : GET /v1/catalog/images/{product_id}.svg (hors GraphQL, sans jeton : une balise <img>
 n'en envoie pas). Visuel généré à partir du produit (catégorie, nom, prix) ; aucun fichier stocké.
@@ -28,7 +34,9 @@ scalar DateTime
 scalar JSON
 
 enum ErrorCode {
+  "Jeton absent (mutation), invalide ou expiré"
   UNAUTHORIZED
+  "Rôle insuffisant pour cette opération (ex. customer ou analyst sur une mutation)"
   FORBIDDEN
   NOT_FOUND
   VALIDATION_ERROR
@@ -172,7 +180,10 @@ type ProductPage {
 
 #  inputs
 
-"Tous les critères sont optionnels et se combinent (ET). Sans `status` : produits actifs et archivés."
+"""
+Tous les critères sont optionnels et se combinent (ET).
+Sans `status` : produits actifs et archivés pour l'équipe ; visiteur et customer : actifs seulement, quel que soit `status`.
+"""
 input ProductFilter {
   category: Category = null
   status: ProductStatus = null
@@ -210,16 +221,17 @@ input ProductUpdateInput {
 #  opérations
 
 type Query {
-  "Lister les produits (filtres + pagination ; tri par product_id, ou par pertinence avec `search`). limit : 1 à 200"
+  "Lister les produits (filtres + pagination ; tri par product_id, ou par pertinence avec `search`). limit : 1 à 200. Public : actifs seulement sans jeton ou pour un customer"
   products(filter: ProductFilter = null, limit: Int! = 50, offset: Int! = 0): ProductPage!
 
-  "Lire un produit ; null s'il n'existe pas"
+  "Lire un produit ; null s'il n'existe pas (ou s'il est archivé, sans jeton ou pour un customer)"
   product(product_id: Int!): Product
 
-  "Lire plusieurs produits en un appel (orders-api : prix des lignes de commande). Ordre de la demande ; les ids inconnus sont ignorés ; 200 ids maximum"
+  "Lire plusieurs produits en un appel (orders-api : prix des lignes de commande). Ordre de la demande ; les ids inconnus sont ignorés (et les archivés, sans jeton ou pour un customer) ; 200 ids maximum"
   productsByIds(ids: [Int!]!): [Product!]!
 }
 
+"Écritures : jeton obligatoire, rôle admin ou catalog_manager (UNAUTHORIZED / FORBIDDEN sinon)"
 type Mutation {
   "Créer un produit (actif). Avec initial_stock : appelle POST /stock du service Stock ; si cet appel échoue, le produit est supprimé (compensation)"
   createProduct(input: ProductInput!, initial_stock: InitialStock = null): Product!

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { getRoles } from '../../auth/auth';
-import { can } from '../../auth/permissions';
+import { can, reservedTo } from '../../auth/permissions';
 import { Badge, Button, Notice, fieldClass } from '../../ui/ui';
+import { Locked } from '../../ui/Locked';
 import { useWarehouseNames } from '../stock/api';
 import { NEXT_STATUS, SHIPMENTS_PAGE_SIZE, useAdvanceShipment, useShipments, type ShipmentStatus } from './api';
 
@@ -16,7 +17,10 @@ const ACTION: Partial<Record<ShipmentStatus, string>> = { preparing: 'Marquer ex
 const DATE_TIME = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
 const when = (iso: string | null) => (iso ? DATE_TIME.format(new Date(iso)) : '—');
 
-/** Expéditions (GET /shipments, les plus récentes d'abord), filtrables, avec l'avancement du statut. */
+/**
+ * Expéditions (GET /shipments, les plus récentes d'abord), filtrables, avec l'avancement du statut.
+ * Sans le droit shipments.update (analyst), les boutons restent visibles mais grisés (D9).
+ */
 export function ShipmentsTable() {
   const canAdvance = can(getRoles(), 'shipments.update');
   const [warehouseId, setWarehouseId] = useState<number | null>(null);
@@ -93,7 +97,7 @@ export function ShipmentsTable() {
               <th className="px-4 py-2.5 font-semibold">Créée</th>
               <th className="px-4 py-2.5 font-semibold">Expédiée</th>
               <th className="px-4 py-2.5 font-semibold">Livrée</th>
-              {canAdvance && <th className="px-4 py-2.5 font-semibold">Action</th>}
+              <th className="px-4 py-2.5 font-semibold">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -124,17 +128,21 @@ export function ShipmentsTable() {
                     <td className="px-4 py-2.5 text-muted">{when(s.created_at)}</td>
                     <td className="px-4 py-2.5 text-muted">{when(s.shipped_at)}</td>
                     <td className="px-4 py-2.5 text-muted">{when(s.delivered_at)}</td>
-                    {canAdvance && (
-                      <td className="px-4 py-2">
-                        {next ? (
-                          <Button className="min-h-9 whitespace-nowrap px-3 text-sm" disabled={busy} onClick={() => advance.mutate({ id: s.id, status: next })}>
+                    <td className="px-4 py-2">
+                      {next ? (
+                        <Locked locked={!canAdvance} reason={reservedTo('shipments.update')}>
+                          <Button
+                            className="min-h-9 whitespace-nowrap px-3 text-sm"
+                            disabled={!canAdvance || busy}
+                            onClick={() => advance.mutate({ id: s.id, status: next })}
+                          >
                             {busy ? '…' : ACTION[s.status]}
                           </Button>
-                        ) : (
-                          <span className="text-xs text-muted">Terminée</span>
-                        )}
-                      </td>
-                    )}
+                        </Locked>
+                      ) : (
+                        <span className="text-xs text-muted">Terminée</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })
