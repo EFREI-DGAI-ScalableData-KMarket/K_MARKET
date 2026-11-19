@@ -5,6 +5,9 @@ Les appels passent par la gateway ; seul /health est appelé en direct (non rout
 Traces laissées : quelques produits de test (tag "pytest"), archivés en fin de test.
 
 Variables : JWT_SECRET (obligatoire), CATALOG_URL, CATALOG_DIRECT_URL.
+
+Accès (D8) : lecture publique (visiteur sans jeton ou customer : produits actifs seulement), écriture
+réservée à admin et catalog_manager ; un jeton fourni doit toujours être valide.
 """
 import os
 import time
@@ -41,6 +44,11 @@ def token(*roles: str, expires_in: int = 600) -> dict:
 MANAGER = token("catalog_manager")
 ANALYST = token("analyst")
 SERVICE = token("service_account")
+CUSTOMER = token("customer")
+ANONYMOUS: dict = {}          # visiteur : aucun en-tête Authorization
+
+# Taille minimale du catalogue de démo (seed réduit à environ 80 produits, vitrine comprise).
+MIN_PRODUCTS = 50
 
 
 def gql(query: str, variables: dict | None = None, headers: dict | None = MANAGER) -> dict:
@@ -97,11 +105,38 @@ def test_health():
     assert r.status_code == 200 and r.json() == {"status": "ok", "version": "v1"}
 
 
-def test_sans_jeton():
-    assert_error(gql("{ product(product_id: 1) { name } }", headers={}), "UNAUTHORIZED")
+def test_lecture_publique_sans_jeton():
+    """Le catalogue se consulte sans connexion ; un visiteur ne voit que les produits actifs."""
+    p = page(limit=200, headers=ANONYMOUS)
+    assert p["total"] > 0 and all(i["status"] == "active" for i in p["items"])
+    assert ok(gql("{ product(product_id: 1) { product_id } }", headers=ANONYMOUS))["product"]["product_id"] == 1
+
+
+def test_ecriture_sans_jeton_ou_par_un_client_refusee():
+    assert_error(gql(CREATE, {"input": livre_input()}, headers=ANONYMOUS), "UNAUTHORIZED")
+    assert_error(gql(CREATE, {"input": livre_input()}, headers=CUSTOMER), "FORBIDDEN")
+    assert_error(gql("mutation { archiveProduct(product_id: 1) { status } }", headers=CUSTOMER), "FORBIDDEN")
+
+
+@pytest.mark.parametrize("headers", [ANONYMOUS, CUSTOMER], ids=["visiteur", "customer"])
+def test_visiteur_et_client_ne_voient_pas_les_archives(headers, created):
+    pid = ok(gql(CREATE, {"input": livre_input()}))["createProduct"]["product_id"]
+    created.append(pid)
+    ok(gql("mutation($id: Int!) { archiveProduct(product_id: $id) { status } }", {"id": pid}))
+
+    # Filtre explicite sur les archivés : ignoré, le statut est forcé à « active ».
+    assert all(i["status"] == "active" for i in page({"status": "inactive"}, limit=200, headers=headers)["items"])
+    # Un produit archivé se comporte comme un produit inconnu.
+    assert ok(gql("query($id: Int!) { product(product_id: $id) { name } }", {"id": pid}, headers))["product"] is None
+    by_ids = ok(gql("query($ids: [Int!]!) { productsByIds(ids: $ids) { product_id } }", {"ids": [1, pid]}, headers))
+    assert [p["product_id"] for p in by_ids["productsByIds"]] == [1]
+    # L'équipe le voit toujours.
+    seen = ok(gql("query($id: Int!) { product(product_id: $id) { status } }", {"id": pid}, ANALYST))["product"]
+    assert seen["status"] == "inactive"
 
 
 def test_jeton_expire_ou_mal_signe():
+    """Même en lecture publique, un jeton fourni doit être valide."""
     assert_error(gql("{ product(product_id: 1) { name } }", headers=token("admin", expires_in=-10)), "UNAUTHORIZED")
     bad = {"Authorization": "Bearer " + jwt.encode({"roles": ["admin"], "exp": int(time.time()) + 60},
                                                    "mauvais-secret-de-test-assez-long", algorithm="HS256")}
@@ -109,7 +144,7 @@ def test_jeton_expire_ou_mal_signe():
 
 
 def test_lecture_tous_roles_ecriture_reservee():
-    for headers in (ANALYST, SERVICE, token("logistics"), token("admin")):
+    for headers in (ANALYST, SERVICE, CUSTOMER, token("logistics"), token("admin")):
         assert ok(gql("{ product(product_id: 1) { product_id } }", headers=headers))["product"]["product_id"] == 1
     assert_error(gql(CREATE, {"input": livre_input()}, headers=ANALYST), "FORBIDDEN")
     assert_error(gql("mutation { archiveProduct(product_id: 1) { status } }", headers=SERVICE), "FORBIDDEN")
@@ -127,12 +162,12 @@ def test_tout_le_catalogue_respecte_le_schema():
         offset += 200
         if not p["has_more"]:
             break
-    assert seen == p["total"] >= 300
+    assert seen == p["total"] >= MIN_PRODUCTS
 
 
 def test_pagination():
     p1, p2 = page(limit=5), page(limit=5, offset=5)
-    assert len(p1["items"]) == 5 and p1["has_more"] and p1["total"] >= 300
+    assert len(p1["items"]) == 5 and p1["has_more"] and p1["total"] >= MIN_PRODUCTS
     ids1, ids2 = [i["product_id"] for i in p1["items"]], [i["product_id"] for i in p2["items"]]
     assert ids1 == sorted(ids1) and max(ids1) < min(ids2)
     assert_error(gql(LIST, {"f": None, "limit": 500, "offset": 0}), "VALIDATION_ERROR")
