@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router';
-import { getRoles, getSubject } from '../auth/auth';
+import { useQueryClient } from '@tanstack/react-query';
+import { getEmail, getRoles, getSubject, logout } from '../auth/auth';
 import { alertKey, useFiringAlerts } from '../features/observability/api';
+import { Logo } from '../ui/Logo';
 import { Toast, type ToastData } from '../ui/ui';
 import { useTheme } from './theme';
 
@@ -20,9 +22,18 @@ const TABS = [
 export function Layout() {
   const [theme, toggleTheme] = useTheme();
   const roles = getRoles();
-  const subject = getSubject();
+  const user = getEmail() ?? getSubject();
   const dark = theme === 'dark';
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function onLogout() {
+    setLoggingOut(true);
+    await logout();
+    queryClient.clear(); // le compte suivant ne doit pas voir les données en cache du précédent
+    navigate('/login', { replace: true });
+  }
 
   // Alertes Prometheus, suivies depuis toutes les pages : compteur dans le menu + notification à chaque nouvelle.
   const alerts = useFiringAlerts();
@@ -58,9 +69,12 @@ export function Layout() {
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="flex flex-col gap-5 border-b border-line bg-surface px-4 py-5 md:sticky md:top-0 md:h-screen md:w-[248px] md:shrink-0 md:gap-8 md:border-b-0 md:border-r md:py-6">
-        <div className="flex items-baseline gap-2 px-2.5">
-          <span className="text-[22px] font-extrabold tracking-tight">KMarket</span>
-          <span lang="ko" className="text-xs text-muted">케이마켓</span>
+        <div className="flex items-center gap-2.5 px-2.5">
+          <Logo className="size-8 shrink-0" />
+          <div className="flex items-baseline gap-2">
+            <span className="text-[22px] font-extrabold tracking-tight">KMarket</span>
+            <span lang="ko" className="text-xs text-muted">케이마켓</span>
+          </div>
         </div>
 
         <nav aria-label="Onglets" className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
@@ -104,9 +118,18 @@ export function Layout() {
             </span>
             <div className="flex min-w-0 flex-col">
               <span className="truncate text-[13px] font-bold">{roles.length ? roles.join(', ') : 'non connecté'}</span>
-              {subject && <span className="truncate text-[11px] text-muted">{subject}</span>}
+              {user && <span className="truncate text-[11px] text-muted">{user}</span>}
             </div>
           </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            disabled={loggingOut}
+            className="flex min-h-11 cursor-pointer items-center gap-2.5 rounded-xl border border-line bg-surface px-3.5 font-semibold text-ink transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <LogoutIcon />
+            {loggingOut ? 'Déconnexion…' : 'Déconnexion'}
+          </button>
         </div>
       </aside>
 
@@ -133,6 +156,14 @@ function MoonIcon() {
   return (
     <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+    </svg>
+  );
+}
+
+function LogoutIcon() {
+  return (
+    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
     </svg>
   );
 }

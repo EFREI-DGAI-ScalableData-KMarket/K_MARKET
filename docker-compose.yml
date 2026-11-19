@@ -84,6 +84,13 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       JWT_SECRET: ${JWT_SECRET:?voir .env}
+      OTEL_SERVICE_NAME: stock-service
+      OTEL_TRACES_EXPORTER: otlp_proto_http
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: "metrics,health"
     ports:
       - "127.0.0.1:8002:8002"
     depends_on:
@@ -102,8 +109,15 @@ services:
       JWT_SECRET: ${JWT_SECRET:?voir .env}
       # Appel à POST /stock après création d'un produit
       STOCK_URL: http://stock-service:8002/v1
-      # AUTH_URL: http://auth-api:8005/v1
+      AUTH_URL: http://auth-service:8005/v1
       CATALOG_API_KEY: ${CATALOG_API_KEY:?voir .env}
+      OTEL_SERVICE_NAME: catalog-service
+      OTEL_TRACES_EXPORTER: otlp_proto_http
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: "metrics,health"
     ports:
       - "127.0.0.1:8004:8004"
     depends_on:
@@ -270,6 +284,17 @@ services:
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+
+
+  # Traces OpenTelemetry : reçoit l'OTLP (4318) et affiche les traces (interface sur 16686)
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    container_name: jaeger
+    restart: unless-stopped
+    environment:
+      JAEGER_LISTEN_HOST: 0.0.0.0   # sinon Jaeger n'écoute que sur localhost, inaccessible aux autres conteneurs
+    ports:
+      - "127.0.0.1:16686:16686"
 
   # MinIO : stockage objet S3 du Data Lake (zones raw / staging / curated / consumption)
   # Image Chainguard : MinIO ne publie plus d'image Docker communautaire depuis octobre 2025.

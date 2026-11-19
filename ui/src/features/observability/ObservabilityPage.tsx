@@ -15,6 +15,7 @@ const COMPONENTS: { job: string; label: string; tech: string; kind: Kind }[] = [
 
 /** Lien vers Grafana. Dans un Codespace, mettre l'URL transférée du port 3000 dans VITE_GRAFANA_URL. */
 const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL || 'http://localhost:3000';
+const JAEGER_URL = import.meta.env.VITE_JAEGER_URL || 'http://localhost:16686'; 
 
 type Status = 'ok' | 'degraded' | 'down' | 'unknown';
 
@@ -63,6 +64,7 @@ export function ObservabilityPage() {
             {h ? `Mis à jour à ${h.at.toLocaleTimeString('fr-FR')} · toutes les 5 s` : 'Métriques Prometheus'}
           </p>
         </div>
+        <div className="flex flex-wrap gap-2">
         <a
           href={GRAFANA_URL}
           target="_blank"
@@ -71,6 +73,15 @@ export function ObservabilityPage() {
         >
           Ouvrir Grafana ↗
         </a>
+        <a
+          href={JAEGER_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-h-11 items-center gap-2 rounded-full border border-line bg-surface px-4 font-semibold text-ink no-underline transition-colors hover:bg-surface-2"
+        >
+          Ouvrir Jaeger ↗
+        </a>
+        </div>
       </div>
 
       {health.error && <Notice tone="bad">Prometheus injoignable : {health.error.message}</Notice>}

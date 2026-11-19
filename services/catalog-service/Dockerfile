@@ -3,4 +3,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY ./app ./app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004"]
+# opentelemetry-instrument active les traces (FastAPI, httpx, pymongo, logging) sans modifier le code.
+# Configuration par les variables OTEL_* de docker-compose.yml.
+CMD ["opentelemetry-instrument", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004"]

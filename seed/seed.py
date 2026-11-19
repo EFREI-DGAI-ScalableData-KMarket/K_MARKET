@@ -98,6 +98,12 @@ DEMO_ACCOUNTS = [  # comptes fixes pour la démo (un par rôle humain)
     ("analyst@market.test", "analyst"),
     ("logistics@market.test", "logistics"),
 ]
+
+DEMO_CUSTOMERS = [  # clients de démo (rôle customer), reliés à orders.customers par user_id (D7)
+    "client1@market.test",
+    "client2@market.test",
+    "client3@market.test",
+]
 SERVICE_KEYS = [  # (nom du compte technique, variable d'environnement contenant la clé)
     ("orders-api", "ORDERS_API_KEY"),
     ("catalog-api", "CATALOG_API_KEY"),
@@ -497,7 +503,13 @@ def build_auth(args, fake, now, demo_password, role_id):
 
     api_key_rows = [(i, name, sha256(require_env(env)), role_id["service_account"], True, now)
                     for i, (name, env) in enumerate(SERVICE_KEYS, start=1)]
-    return user_rows, user_role_rows, api_key_rows
+    customer_links = []  # (customer_id, user_id, email)
+    for cid, email in enumerate(DEMO_CUSTOMERS, start=1):
+        uid = len(user_rows) + 1
+        user_rows.append((uid, email, bcrypt_hash(demo_password), True, now - timedelta(days=200)))
+        user_role_rows.append((uid, role_id["customer"]))
+        customer_links.append((cid, uid, email))
+    return user_rows, user_role_rows, api_key_rows, customer_links
 
 
 
@@ -576,11 +588,16 @@ def main():
 
             cur.execute("SELECT name, id FROM auth.roles")
             role_id = dict(cur.fetchall())
-            expected = {"admin", "catalog_manager", "analyst", "logistics", "service_account"}
+            expected = {"admin", "catalog_manager", "analyst", "logistics", "service_account","customer"}
             if not expected <= role_id.keys():
                 sys.exit(f"Rôles manquants dans auth.roles : {sorted(expected - role_id.keys())} "
                          "(créés par db/postgres/05_auth.sql)")
-            user_rows, user_role_rows, api_key_rows = build_auth(args, fake, now, demo_password, role_id)
+            user_rows, user_role_rows, api_key_rows, customer_links = build_auth(args, fake, now, demo_password, role_id)
+            # Le client relié prend l'email de son compte ; les autres n'ont pas de compte (user_id NULL).
+            linked = {cid: (uid, email) for cid, uid, email in customer_links}
+            customer_rows = [(cid, name, linked[cid][1] if cid in linked else email, created,
+                              linked[cid][0] if cid in linked else None)
+                             for cid, name, email, created in customer_rows]
             ins("INSERT INTO auth.users (id, email, password_hash, is_active, created_at) VALUES %s", user_rows)
             ins("INSERT INTO auth.user_roles (user_id, role_id) VALUES %s", user_role_rows)
             ins("INSERT INTO auth.api_keys (id, name, key_hash, role_id, is_active, created_at) VALUES %s", api_key_rows)
@@ -588,7 +605,7 @@ def main():
             ins("INSERT INTO inventory.warehouses (id, name, capacity_units) VALUES %s",
                 [(wid, name, cap) for wid, name, cap, _ in warehouses])
             ins("INSERT INTO inventory.stock (product_id, warehouse_id, quantity, updated_at) VALUES %s", stock_rows)
-            ins("INSERT INTO orders.customers (id, name, email, created_at) VALUES %s", customer_rows)
+            ins("INSERT INTO orders.customers (id, name, email, created_at, user_id) VALUES %s", customer_rows)
 
             buf = {"o": [], "i": [], "p": [], "r": [], "s": [],"k": []}
             ids = [1, 1, 1, 1]  # item_id, res_id, pay_id, ship_id

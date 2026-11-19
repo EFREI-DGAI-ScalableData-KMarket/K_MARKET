@@ -7,3 +7,10 @@ pytest
 PyJWT
 httpx
 prometheus-fastapi-instrumentator
+# Traces OpenTelemetry (instrumentation automatique, envoi OTLP/HTTP vers Jaeger)
+opentelemetry-distro
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
+opentelemetry-instrumentation-pymongo
+opentelemetry-instrumentation-logging
