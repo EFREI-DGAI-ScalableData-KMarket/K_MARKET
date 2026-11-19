@@ -1,23 +1,40 @@
+import type { ReactElement } from 'react';
 import { createBrowserRouter, redirect, type LoaderFunctionArgs } from 'react-router';
 import { Layout } from './Layout';
-import { ensureSession } from '../auth/auth';
+import { ensureSession, getRoles, logout } from '../auth/auth';
+import { canTab, isInternal, type Tab } from '../auth/permissions';
 import { CatalogPage } from '../features/catalog/CatalogPage';
+import { AccessPage } from '../features/access/AccessPage';
 import { Pending } from '../pages/Pending';
 import { LoginPage } from '../pages/LoginPage';
+import { AccessDenied } from '../pages/AccessDenied';
 import { OverviewPage } from '../features/overview/OverviewPage';
 import { ObservabilityPage } from '../features/observability/ObservabilityPage';
 import { LogisticsPage } from '../features/logistics/LogisticsPage';
 
-/** Toutes les pages sauf /login : session valide (au besoin renouvelée), sinon redirection vers /login. */
+/**
+ * Back-office : session valide (au besoin renouvelée) ET rôle de l'équipe.
+ * Sans session : /login. Compte client (customer) : déconnecté et renvoyé vers /login avec une explication.
+ */
 async function requireSession({ request }: LoaderFunctionArgs) {
-  if (await ensureSession()) return null;
+  if (await ensureSession()) {
+    if (isInternal(getRoles())) return null;
+    await logout();
+    throw redirect('/login?reason=client');
+  }
   const url = new URL(request.url);
   throw redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
 }
 
-/** Déjà connecté (ou session récupérable après rechargement) : pas besoin de la page de connexion. */
+/** Déjà connecté avec un compte de l'équipe : pas besoin de la page de connexion. */
 async function skipIfLoggedIn() {
-  return (await ensureSession()) ? redirect('/') : null;
+  return (await ensureSession()) && isInternal(getRoles()) ? redirect('/') : null;
+}
+
+/** Onglet réservé : la page s'affiche seulement si le rôle y a droit (le lien du menu, lui, est grisé). */
+function guard(tab: Tab, page: ReactElement) {
+  const Guarded = () => (canTab(getRoles(), tab) ? page : <AccessDenied tab={tab} />);
+  return <Guarded />;
 }
 
 export const router = createBrowserRouter([
@@ -28,11 +45,12 @@ export const router = createBrowserRouter([
     loader: requireSession,
     HydrateFallback: () => null,
     children: [
-      { index: true, element: <OverviewPage /> },
-      { path: 'commandes', element: <Pending title="Commandes" waitingFor="services Commandes et Paiement" /> },
-      { path: 'catalogue', element: <CatalogPage /> },
-      { path: 'logistique', element: <LogisticsPage /> },
-      { path: 'observabilite', element: <ObservabilityPage /> },
+      { index: true, element: guard('overview', <OverviewPage />) },
+      { path: 'commandes', element: guard('orders', <Pending title="Commandes" waitingFor="services Commandes et Paiement" />) },
+      { path: 'catalogue', element: guard('catalog', <CatalogPage />) },
+      { path: 'logistique', element: guard('logistics', <LogisticsPage />) },
+      { path: 'observabilite', element: guard('observability', <ObservabilityPage />) },
+      { path: 'acces', element: guard('access', <AccessPage />) },
     ],
   },
 ]);

@@ -32,6 +32,8 @@ http:
     
     auth:
       rule: "PathPrefix(`/v1/auth`) || PathPrefix(`/v1/admin`)"
+      entryPoints: [web]
+      middlewares: [rate-limit]
       service: auth
 
     orders:
