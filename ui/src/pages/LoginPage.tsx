@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { login } from '../auth/auth';
+import { getRoles, login, logout } from '../auth/auth';
+import { isInternal } from '../auth/permissions';
 import { useTheme } from '../app/theme';
 import { Logo } from '../ui/Logo';
 import { LoginIllustration } from './LoginIllustration';
@@ -15,6 +16,9 @@ const DEMO_ACCOUNTS = import.meta.env.DEV
     ]
   : [];
 
+/** Un compte client (rôle customer) n'entre pas dans le back-office (D9). */
+const CLIENT_MESSAGE = "Ce compte est un compte client : cet espace est réservé à l'équipe KMarket.";
+
 const fieldCls =
   'min-h-11 w-full rounded-xl border border-line bg-surface px-3.5 text-ink outline-none transition-colors focus:border-accent';
 
@@ -24,7 +28,7 @@ export function LoginPage() {
   const [params] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(params.get('reason') === 'client' ? CLIENT_MESSAGE : null);
   const [pending, setPending] = useState(false);
 
   async function onSubmit(e: FormEvent) {
@@ -33,6 +37,11 @@ export function LoginPage() {
     setPending(true);
     try {
       await login(email.trim(), password);
+      if (!isInternal(getRoles())) {
+        await logout();
+        setError(CLIENT_MESSAGE);
+        return;
+      }
       // Retour à la page demandée ; uniquement un chemin interne (pas de redirection vers un autre site).
       const next = params.get('next');
       navigate(next?.startsWith('/') && !next.startsWith('//') ? next : '/', { replace: true });

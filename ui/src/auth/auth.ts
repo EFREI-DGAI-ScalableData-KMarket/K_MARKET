@@ -10,7 +10,7 @@
  * Le refresh est partagé : si plusieurs appels reçoivent un 401 en même temps, un seul
  * POST /auth/refresh part et tous l'attendent (le refresh token ne sert qu'une fois).
  */
-export type Role = 'admin' | 'catalog_manager' | 'analyst' | 'logistics' | 'service_account';
+export type Role = 'admin' | 'catalog_manager' | 'analyst' | 'logistics' | 'service_account' | 'customer';
 
 type TokenPair = { access_token: string; refresh_token: string | null; expires_in: number };
 
