@@ -110,6 +110,23 @@ services:
       mongo:
         condition: service_healthy
 
+  # Service Auth (REST, Spring Boot)
+  auth-service:
+    build: ./services/auth-service
+    container_name: auth-service
+    restart: unless-stopped
+    environment:
+      # Compte dédié créé par db/postgres/05_auth.sql (moindre privilège, pas root).
+      AUTH_DB_URL: jdbc:postgresql://postgres:5432/kmarket
+      AUTH_DB_USER: auth_svc
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?voir .env}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+    ports:
+      - "127.0.0.1:8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # API Gateway (Traefik) : configuration dans gateway/
   gateway:
     image: traefik:v3.7
@@ -125,6 +142,7 @@ services:
     depends_on:
       - stock-service
       - catalog-service
+      - auth-service
       - ui
 
   # Kafka (KRaft, sans ZooKeeper)
