@@ -1,10 +1,10 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.controller;
 
 import com.kmarket.authservice.service.AuthService;
 import com.kmarket.authservice.service.AuthService.ApiKeyCreation;
-import com.kmarket.authservice.web.dto.ApiKeyCreatedResponse;
-import com.kmarket.authservice.web.dto.ApiKeyResponse;
-import com.kmarket.authservice.web.dto.CreateApiKeyRequest;
+import com.kmarket.authservice.dto.ApiKeyCreatedResponse;
+import com.kmarket.authservice.dto.ApiKeyResponse;
+import com.kmarket.authservice.dto.CreateApiKeyRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

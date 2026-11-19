@@ -1,7 +1,7 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.controller;
 
 import com.kmarket.authservice.service.AuthService;
-import com.kmarket.authservice.web.dto.RoleResponse;
+import com.kmarket.authservice.dto.RoleResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

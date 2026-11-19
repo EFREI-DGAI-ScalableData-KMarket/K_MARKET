@@ -1,6 +1,6 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.controller;
 
-import com.kmarket.authservice.web.dto.HealthResponse;
+import com.kmarket.authservice.dto.HealthResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;

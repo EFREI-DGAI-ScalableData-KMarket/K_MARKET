@@ -1,4 +1,4 @@
-package com.kmarket.authservice.web.dto;
+package com.kmarket.authservice.dto;
 
 import com.kmarket.authservice.entity.Role;
 

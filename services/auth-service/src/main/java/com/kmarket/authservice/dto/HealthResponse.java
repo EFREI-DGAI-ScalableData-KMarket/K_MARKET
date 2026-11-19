@@ -1,4 +1,4 @@
-package com.kmarket.authservice.web.dto;
+package com.kmarket.authservice.dto;
 
 /** Response matching the {@code /health} schema of the contract. */
 public record HealthResponse(

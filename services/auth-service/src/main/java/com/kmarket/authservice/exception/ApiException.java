@@ -1,4 +1,4 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.exception;
 
 import lombok.Getter;
 import org.springframework.http.HttpStatus;

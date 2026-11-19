@@ -1,6 +1,6 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.exception;
 
-import com.kmarket.authservice.web.dto.ErrorResponse;
+import com.kmarket.authservice.dto.ErrorResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;

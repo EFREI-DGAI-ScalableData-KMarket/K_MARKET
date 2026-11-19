@@ -1,4 +1,4 @@
-package com.kmarket.authservice.web.dto;
+package com.kmarket.authservice.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;

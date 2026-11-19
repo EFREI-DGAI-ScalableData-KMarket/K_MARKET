@@ -1,4 +1,4 @@
-package com.kmarket.authservice.web.dto;
+package com.kmarket.authservice.dto;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;

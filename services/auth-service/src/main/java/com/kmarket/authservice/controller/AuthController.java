@@ -1,11 +1,12 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.controller;
 
 import com.kmarket.authservice.entity.User;
+import com.kmarket.authservice.exception.ApiException;
 import com.kmarket.authservice.service.AuthService;
-import com.kmarket.authservice.web.dto.LoginRequest;
-import com.kmarket.authservice.web.dto.RefreshRequest;
-import com.kmarket.authservice.web.dto.TokenPair;
-import com.kmarket.authservice.web.dto.UserResponse;
+import com.kmarket.authservice.dto.LoginRequest;
+import com.kmarket.authservice.dto.RefreshRequest;
+import com.kmarket.authservice.dto.TokenPair;
+import com.kmarket.authservice.dto.UserResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

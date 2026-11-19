@@ -1,9 +1,9 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.controller;
 
 import com.kmarket.authservice.entity.User;
 import com.kmarket.authservice.service.AuthService;
-import com.kmarket.authservice.web.dto.CreateUserRequest;
-import com.kmarket.authservice.web.dto.UserResponse;
+import com.kmarket.authservice.dto.CreateUserRequest;
+import com.kmarket.authservice.dto.UserResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

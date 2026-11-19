@@ -1,15 +1,16 @@
-package com.kmarket.authservice.web;
+package com.kmarket.authservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kmarket.authservice.config.SecurityConfig;
 import com.kmarket.authservice.entity.Role;
 import com.kmarket.authservice.entity.User;
+import com.kmarket.authservice.exception.ApiException;
 import com.kmarket.authservice.security.JwtAuthenticationFilter;
 import com.kmarket.authservice.security.JwtService;
 import com.kmarket.authservice.service.AuthService;
-import com.kmarket.authservice.web.dto.LoginRequest;
-import com.kmarket.authservice.web.dto.RefreshRequest;
-import com.kmarket.authservice.web.dto.TokenPair;
+import com.kmarket.authservice.dto.LoginRequest;
+import com.kmarket.authservice.dto.RefreshRequest;
+import com.kmarket.authservice.dto.TokenPair;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
