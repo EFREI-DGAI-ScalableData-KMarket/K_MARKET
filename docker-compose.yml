@@ -109,7 +109,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?voir .env}
       # Appel à POST /stock après création d'un produit
       STOCK_URL: http://stock-service:8002/v1
-      # AUTH_URL: http://auth-api:8005/v1
+      AUTH_URL: http://auth-service:8005/v1
       CATALOG_API_KEY: ${CATALOG_API_KEY:?voir .env}
       OTEL_SERVICE_NAME: catalog-service
       OTEL_TRACES_EXPORTER: otlp_proto_http

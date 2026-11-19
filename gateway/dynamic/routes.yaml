@@ -29,6 +29,12 @@ http:
       middlewares: [rate-limit]
       service: catalog
 
+    
+    auth:
+      rule: "PathPrefix(`/v1/auth`) || PathPrefix(`/v1/admin`)"
+      service: auth
+
+
     ui:
       rule: "PathPrefix(`/`)"
       priority: 1
@@ -52,6 +58,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://catalog-service:8004"
+
+    auth: 
+      loadBalancer: 
+        servers: 
+          - url: "http://auth-service:8005"
 
     ui:
       loadBalancer:
