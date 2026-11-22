@@ -9,6 +9,8 @@ import com.kmarket.ordersservice.entity.Customer;
 import com.kmarket.ordersservice.entity.IdempotencyKey;
 import com.kmarket.ordersservice.entity.Order;
 import com.kmarket.ordersservice.entity.OrderItem;
+import com.kmarket.ordersservice.event.OrderEvent;
+import com.kmarket.ordersservice.event.OrderEventPublisher;
 import com.kmarket.ordersservice.exception.ApiException;
 import com.kmarket.ordersservice.repository.CustomerRepository;
 import com.kmarket.ordersservice.repository.IdempotencyKeyRepository;
@@ -45,6 +47,7 @@ public class OrderService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ProductPricer productPricer;
     private final ProductNameResolver productNameResolver;
+    private final OrderEventPublisher orderEventPublisher;
 
     /**
      * Lists recent orders (most recent first), optionally filtered by {@code status}
@@ -142,6 +145,12 @@ public class OrderService {
 
         order.setStatus(target.value());
         orderRepository.saveAndFlush(order);
+
+        // Stage the lifecycle event in the same transaction (transactional outbox).
+        orderEventPublisher.publish(OrderEvent.statusChanged(
+                order.getId(), order.getCustomerId(),
+                current.value(), target.value(), order.getTotalCents()));
+
         return OrderResponse.from(order);
     }
 
@@ -221,6 +230,11 @@ public class OrderService {
         } catch (DataIntegrityViolationException ex) {
             throw ApiException.conflict("Order already created for this Idempotency-Key");
         }
+
+        // 7. Stage the creation event in the same transaction (transactional outbox).
+        //    Reached only on genuine first creation; the idempotent replay returns earlier.
+        orderEventPublisher.publish(OrderEvent.placed(
+                order.getId(), order.getCustomerId(), order.getStatus(), order.getTotalCents()));
 
         return OrderResponse.from(order);
     }
