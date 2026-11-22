@@ -3,17 +3,20 @@ package com.kmarket.ordersservice;
 import com.kmarket.ordersservice.dto.OrderCreateRequest;
 import com.kmarket.ordersservice.dto.OrderResponse;
 import com.kmarket.ordersservice.entity.Customer;
+import com.kmarket.ordersservice.event.OrderEvent;
 import com.kmarket.ordersservice.exception.ApiException;
 import com.kmarket.ordersservice.repository.CustomerRepository;
 import com.kmarket.ordersservice.repository.IdempotencyKeyRepository;
 import com.kmarket.ordersservice.repository.OrderItemRepository;
 import com.kmarket.ordersservice.repository.OrderRepository;
+import com.kmarket.ordersservice.repository.OutboxEventRepository;
 import com.kmarket.ordersservice.service.OrderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
 import java.util.UUID;
@@ -27,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
+@TestPropertySource(properties = "orders.outbox.relay.enabled=false")
 class OrderCreateIntegrationTest {
 
     @Autowired
@@ -39,11 +43,14 @@ class OrderCreateIntegrationTest {
     private IdempotencyKeyRepository idempotencyKeyRepository;
     @Autowired
     private CustomerRepository customerRepository;
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
 
     private Integer customerId;
 
     @BeforeEach
     void setUp() {
+        outboxEventRepository.deleteAll();
         idempotencyKeyRepository.deleteAll();
         orderItemRepository.deleteAll();
         orderRepository.deleteAll();
@@ -75,6 +82,18 @@ class OrderCreateIntegrationTest {
         assertThat(orderRepository.count()).isEqualTo(1);
         assertThat(orderItemRepository.count()).isEqualTo(2);
         assertThat(idempotencyKeyRepository.findById(key)).isPresent();
+
+        // Exactly one order_placed event was staged in the outbox, in the same transaction.
+        assertThat(outboxEventRepository.count()).isEqualTo(1);
+        var event = outboxEventRepository.findAll().get(0);
+        assertThat(event.getTopic()).isEqualTo("orders.events");
+        assertThat(event.getEventKey()).isEqualTo(String.valueOf(created.id()));
+        assertThat(event.getPublishedAt()).isNull();
+        assertThat(event.getPayload())
+                .contains("\"event_type\"")
+                .contains(OrderEvent.ORDER_PLACED)
+                .contains("\"order_id\"")
+                .contains(String.valueOf(created.id()));
     }
 
     @Test
@@ -91,6 +110,9 @@ class OrderCreateIntegrationTest {
         assertThat(orderRepository.count()).isEqualTo(1);
         assertThat(orderItemRepository.count()).isEqualTo(1);
         assertThat(idempotencyKeyRepository.count()).isEqualTo(1);
+
+        // The idempotent replay must NOT stage a second event.
+        assertThat(outboxEventRepository.count()).isEqualTo(1);
     }
 
     @Test
@@ -106,5 +128,6 @@ class OrderCreateIntegrationTest {
         assertThat(orderRepository.count()).isZero();
         assertThat(orderItemRepository.count()).isZero();
         assertThat(idempotencyKeyRepository.count()).isZero();
+        assertThat(outboxEventRepository.count()).isZero();
     }
 }

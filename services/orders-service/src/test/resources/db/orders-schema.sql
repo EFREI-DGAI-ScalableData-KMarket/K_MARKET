@@ -54,6 +54,17 @@ CREATE TABLE orders.idempotency_keys (
         REFERENCES orders.orders (id, created_at) ON DELETE CASCADE
 );
 
+-- Transactional outbox: events published to Kafka by the service relay.
+CREATE TABLE orders.outbox (
+    id           BIGSERIAL PRIMARY KEY,
+    topic        TEXT        NOT NULL,
+    event_key    TEXT        NOT NULL,
+    payload      JSONB       NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_at TIMESTAMPTZ
+);
+CREATE INDEX idx_orders_outbox_pending ON orders.outbox (id) WHERE published_at IS NULL;
+
 -- Catch-all partitions so inserts work without the monthly-partition job.
 CREATE TABLE orders.orders_default      PARTITION OF orders.orders      DEFAULT;
 CREATE TABLE orders.order_items_default PARTITION OF orders.order_items DEFAULT;
