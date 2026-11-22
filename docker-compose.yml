@@ -213,7 +213,7 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        for t in inventory.stock-changed inventory.shipment-status-changed; do
+        for t in inventory.stock-changed inventory.shipment-status-changed orders.events; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists \
             --topic "$$t" --partitions 4 --replication-factor 1
         done
