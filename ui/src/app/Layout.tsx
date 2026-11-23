@@ -7,14 +7,15 @@ import { alertKey, useFiringAlerts } from '../features/observability/api';
 import { Logo } from '../ui/Logo';
 import { Toast, type ToastData } from '../ui/ui';
 import { useTheme } from './theme';
+import { GESTION, GESTION_LOGIN } from './paths';
 
 const TABS: { tab: Tab; to: string; label: string }[] = [
-  { tab: 'overview', to: '/', label: "Vue d'ensemble" },
-  { tab: 'orders', to: '/commandes', label: 'Commandes' },
-  { tab: 'catalog', to: '/catalogue', label: 'Catalogue' },
-  { tab: 'logistics', to: '/logistique', label: 'Logistique' },
-  { tab: 'observability', to: '/observabilite', label: 'Observabilité' },
-  { tab: 'access', to: '/acces', label: 'Accès & rôles' },
+  { tab: 'overview', to: GESTION, label: "Vue d'ensemble" },
+  { tab: 'orders', to: `${GESTION}/commandes`, label: 'Commandes' },
+  { tab: 'catalog', to: `${GESTION}/catalogue`, label: 'Catalogue' },
+  { tab: 'logistics', to: `${GESTION}/logistique`, label: 'Logistique' },
+  { tab: 'observability', to: `${GESTION}/observabilite`, label: 'Observabilité' },
+  { tab: 'access', to: `${GESTION}/acces`, label: 'Accès & rôles' },
 ];
 
 type FiringAlerts = NonNullable<ReturnType<typeof useFiringAlerts>['data']>;
@@ -36,7 +37,7 @@ export function Layout() {
     setLoggingOut(true);
     await logout();
     queryClient.clear(); // le compte suivant ne doit pas voir les données en cache du précédent
-    navigate('/login', { replace: true });
+    navigate(GESTION_LOGIN, { replace: true });
   }
 
   // Alertes Prometheus : suivies seulement si le rôle a accès à l'Observabilité (sinon 403 toutes les 5 s, et un compteur inutile).
@@ -61,7 +62,7 @@ export function Layout() {
               <NavLink
                 key={t.to}
                 to={t.to}
-                end={t.to === '/'}
+                end={t.to === GESTION}
                 className={({ isActive }) =>
                   `flex min-h-11 shrink-0 items-center rounded-xl px-3.5 font-semibold whitespace-nowrap no-underline transition-colors ${
                     isActive ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-surface-2 hover:text-ink'
@@ -162,7 +163,7 @@ function AlertWatcher({ onChange }: { onChange: (alerts: FiringAlerts) => void }
       id: Date.now(),
       tone: a.labels.severity === 'critical' ? 'bad' : 'warn',
       message: `${a.labels.alertname} : ${a.annotations.summary ?? 'alerte déclenchée'}${fresh.length > 1 ? ` (+${fresh.length - 1})` : ''}`,
-      action: { label: 'Voir', run: () => navigate('/observabilite') },
+      action: { label: 'Voir', run: () => navigate(`${GESTION}/observabilite`) },
     });
     // firingKeys résume la liste : on ne réagit qu'à un changement d'alertes, pas à chaque requête.
     // eslint-disable-next-line react-hooks/exhaustive-deps

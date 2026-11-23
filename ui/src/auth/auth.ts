@@ -10,6 +10,7 @@
  * Le refresh est partagé : si plusieurs appels reçoivent un 401 en même temps, un seul
  * POST /auth/refresh part et tous l'attendent (le refresh token ne sert qu'une fois).
  */
+import { GESTION_LOGIN } from '../app/paths';
 export type Role = 'admin' | 'catalog_manager' | 'analyst' | 'logistics' | 'service_account' | 'customer';
 
 type TokenPair = { access_token: string; refresh_token: string | null; expires_in: number };
@@ -109,11 +110,12 @@ export async function logout(): Promise<void> {
 }
 
 /** Session perdue en cours d'utilisation : retour à la page de connexion, puis à la page courante. */
+/** Session perdue en cours d'utilisation : retour à la page de connexion, puis à la page courante. */
 export function sessionExpired(): void {
   clearSession();
-  if (redirecting || location.pathname === '/login') return;
+  if (redirecting || location.pathname === GESTION_LOGIN) return;
   redirecting = true;
-  location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+  location.assign(`${GESTION_LOGIN}?next=${encodeURIComponent(location.pathname + location.search)}`);
 }
 
 /** Claims du JWT, décodés sans vérification (affichage seulement : c'est l'API qui décide, 401/403). */

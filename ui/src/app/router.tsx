@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { createBrowserRouter, redirect, type LoaderFunctionArgs } from 'react-router';
 import { Layout } from './Layout';
+import { GESTION, GESTION_LOGIN } from './paths';
 import { ensureSession, getRoles, logout } from '../auth/auth';
 import { canTab, isInternal, type Tab } from '../auth/permissions';
 import { CatalogPage } from '../features/catalog/CatalogPage';
@@ -13,22 +14,22 @@ import { ObservabilityPage } from '../features/observability/ObservabilityPage';
 import { LogisticsPage } from '../features/logistics/LogisticsPage';
 
 /**
- * Back-office : session valide (au besoin renouvelée) ET rôle de l'équipe.
- * Sans session : /login. Compte client (customer) : déconnecté et renvoyé vers /login avec une explication.
+ * Espace de gestion : session valide (au besoin renouvelée) ET rôle de l'équipe.
+ * Sans session : page de connexion. Compte client (customer) : déconnecté et renvoyé vers la connexion avec une explication.
  */
 async function requireSession({ request }: LoaderFunctionArgs) {
   if (await ensureSession()) {
     if (isInternal(getRoles())) return null;
     await logout();
-    throw redirect('/login?reason=client');
+    throw redirect(`${GESTION_LOGIN}?reason=client`);
   }
   const url = new URL(request.url);
-  throw redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+  throw redirect(`${GESTION_LOGIN}?next=${encodeURIComponent(url.pathname + url.search)}`);
 }
 
 /** Déjà connecté avec un compte de l'équipe : pas besoin de la page de connexion. */
 async function skipIfLoggedIn() {
-  return (await ensureSession()) && isInternal(getRoles()) ? redirect('/') : null;
+  return (await ensureSession()) && isInternal(getRoles()) ? redirect(GESTION) : null;
 }
 
 /** Onglet réservé : la page s'affiche seulement si le rôle y a droit (le lien du menu, lui, est grisé). */
@@ -38,9 +39,11 @@ function guard(tab: Tab, page: ReactElement) {
 }
 
 export const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage />, loader: skipIfLoggedIn, HydrateFallback: () => null },
+  // Boutique (D9) : à venir. En attendant, la racine mène à l'espace de gestion.
+  { path: '/', loader: () => redirect(GESTION) },
+  { path: GESTION_LOGIN, element: <LoginPage />, loader: skipIfLoggedIn, HydrateFallback: () => null },
   {
-    path: '/',
+    path: GESTION,
     element: <Layout />,
     loader: requireSession,
     HydrateFallback: () => null,

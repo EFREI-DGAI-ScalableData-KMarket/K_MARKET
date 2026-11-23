@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { getRoles } from '../auth/auth';
 import { ROLE_LABELS, TAB_LABELS, reservedTo, type Tab } from '../auth/permissions';
 import { Badge } from '../ui/ui';
+import { GESTION } from '../app/paths';
 
 /** Onglet interdit atteint par son adresse (le lien du menu, lui, est grisé). Le refus réel reste celui de l'API (403). */
 export function AccessDenied({ tab }: { tab: Tab }) {
@@ -16,7 +17,7 @@ export function AccessDenied({ tab }: { tab: Tab }) {
         {reservedTo(tab)}.
       </p>
       <Link
-        to="/"
+        to={GESTION}
         className="inline-flex min-h-11 items-center rounded-full border border-line bg-surface px-4 font-semibold text-ink no-underline transition-colors hover:bg-surface-2"
       >
         Retour à la vue d'ensemble

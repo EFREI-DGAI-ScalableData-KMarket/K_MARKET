@@ -5,6 +5,7 @@ import { isInternal } from '../auth/permissions';
 import { useTheme } from '../app/theme';
 import { Logo } from '../ui/Logo';
 import { LoginIllustration } from './LoginIllustration';
+import { GESTION } from '../app/paths';
 
 /** Comptes créés par seed/seed.py (mot de passe : DEMO_PASSWORD). Absents du build de production. */
 const DEMO_ACCOUNTS = import.meta.env.DEV
@@ -22,6 +23,10 @@ const CLIENT_MESSAGE = "Ce compte est un compte client : cet espace est réserv�
 const fieldCls =
   'min-h-11 w-full rounded-xl border border-line bg-surface px-3.5 text-ink outline-none transition-colors focus:border-accent';
 
+/** Retour après connexion : seulement vers une page de l'espace de gestion (pas de redirection ouverte). */
+function safeNext(next: string | null): string {
+  return next && (next === GESTION || next.startsWith(`${GESTION}/`) || next.startsWith(`${GESTION}?`)) ? next : GESTION;
+}
 export function LoginPage() {
   useTheme(); // même thème que le reste de l'application
   const navigate = useNavigate();
@@ -43,8 +48,7 @@ export function LoginPage() {
         return;
       }
       // Retour à la page demandée ; uniquement un chemin interne (pas de redirection vers un autre site).
-      const next = params.get('next');
-      navigate(next?.startsWith('/') && !next.startsWith('//') ? next : '/', { replace: true });
+      navigate(safeNext(params.get('next')), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connexion impossible.');
     } finally {
