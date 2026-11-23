@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router';
+import { NavLink, Outlet, useNavigate, Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { getEmail, getRoles, getSubject, logout } from '../auth/auth';
 import { ROLE_LABELS, canTab, reservedTo, type Tab } from '../auth/permissions';
@@ -49,11 +49,13 @@ export function Layout() {
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="flex flex-col gap-5 border-b border-line bg-surface px-4 py-5 md:sticky md:top-0 md:h-screen md:w-[248px] md:shrink-0 md:gap-8 md:border-b-0 md:border-r md:py-6">
         <div className="flex items-center gap-2.5 px-2.5">
+          <Link to={GESTION} className="flex items-center gap-2.5 px-2.5 text-ink no-underline">
           <Logo className="size-8 shrink-0" />
           <div className="flex items-baseline gap-2">
             <span className="text-[22px] font-extrabold tracking-tight">KMarket</span>
             <span lang="ko" className="text-xs text-muted">케이마켓</span>
           </div>
+        </Link>
         </div>
 
         <nav aria-label="Onglets" className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
@@ -96,6 +98,9 @@ export function Layout() {
         </nav>
 
         <div className="flex flex-col gap-2.5 md:mt-auto">
+          <a href="/" target="_blank" rel="noreferrer" className="px-3.5 text-sm font-semibold text-muted no-underline hover:text-ink">
+            Voir la boutique ↗
+          </a>
           <button
             type="button"
             onClick={toggleTheme}
