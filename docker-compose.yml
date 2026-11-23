@@ -124,6 +124,27 @@ services:
       mongo:
         condition: service_healthy
 
+  # Service Commandes (REST, Spring Boot)
+  orders-service:
+    build: ./services/orders-service
+    container_name: orders-service
+    restart: unless-stopped
+    environment:
+      # Compte dédié créé par data/postgres/08_roles.sh (moindre privilège, pas root).
+      ORDERS_DB_URL: jdbc:postgresql://postgres:5432/kmarket
+      ORDERS_DB_USER: orders_svc
+      ORDERS_DB_PASSWORD: ${ORDERS_DB_PASSWORD:?voir .env}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+      # Broker interne (listener INTERNAL). Le relais outbox tourne dans le
+      # service orders-outbox-relay dédié (profil "stream"), pas ici.
+      KAFKA_BOOTSTRAP: kafka:19092
+      ORDERS_OUTBOX_RELAY_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # Service Auth (REST, Spring Boot)
   auth-service:
     build: ./services/auth-service
@@ -156,6 +177,7 @@ services:
     depends_on:
       - stock-service
       - catalog-service
+      - orders-service
       - auth-service
       - ui
 
@@ -227,7 +249,7 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        for t in inventory.stock-changed inventory.shipment-status-changed; do
+        for t in inventory.stock-changed inventory.shipment-status-changed orders.events; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists \
             --topic "$$t" --partitions 4 --replication-factor 1
         done
@@ -253,6 +275,27 @@ services:
       kafka-init:
         condition: service_completed_successfully
   
+  # Publie dans Kafka les événements de orders.outbox (même image que orders-service).
+  # C'est la même application Spring Boot que orders-service, mais avec le relais activé ;
+  # le serveur web tourne sur un port éphémère (SERVER_PORT=0) car on ne l'expose pas.
+  orders-outbox-relay:
+    build: ./services/orders-service
+    profiles: ["stream"]
+    restart: unless-stopped
+    environment:
+      ORDERS_DB_URL: jdbc:postgresql://postgres:5432/kmarket
+      ORDERS_DB_USER: orders_svc
+      ORDERS_DB_PASSWORD: ${ORDERS_DB_PASSWORD:?voir .env}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+      KAFKA_BOOTSTRAP: kafka:19092
+      ORDERS_OUTBOX_RELAY_ENABLED: "true"
+      SERVER_PORT: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
   # --- Observabilité : Prometheus (métriques + alertes) et Grafana (tableau de bord) ---
   prometheus:
     image: prom/prometheus:v2.53.0

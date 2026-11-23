@@ -51,4 +51,16 @@ CREATE TABLE orders.idempotency_keys (
         REFERENCES orders.orders (id, created_at) ON DELETE CASCADE
 );
 
+-- Outbox du service Commandes : événements à publier dans Kafka (pattern transactional outbox).
+-- Écrite dans la même transaction que la commande ; le relais orders-service la publie ensuite.
+CREATE TABLE IF NOT EXISTS orders.outbox (
+    id           BIGSERIAL PRIMARY KEY,
+    topic        TEXT        NOT NULL,
+    event_key    TEXT        NOT NULL,                 -- clé Kafka (order_id) : même commande -> même partition
+    payload      JSONB       NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_at TIMESTAMPTZ                           -- NULL = pas encore publié
+);
+CREATE INDEX IF NOT EXISTS idx_orders_outbox_pending ON orders.outbox (id) WHERE published_at IS NULL;
+
 COMMIT;
