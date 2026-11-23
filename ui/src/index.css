@@ -18,8 +18,8 @@
   --warn: #92400e;
   --bad-bg: #fee2e2;
   --bad: #991b1b;
-  --info-bg: #fbe7ef;
-  --info: #8e1f4c;
+  --info-bg: #e3edfb;
+  --info: #1d4f91;
   color-scheme: light;
 }
 
@@ -39,8 +39,8 @@
   --warn: #fcd34d;
   --bad-bg: #40191f;
   --bad: #fca5a5;
-  --info-bg: #3a2232;
-  --info: #f2a7c3;
+  --info-bg: #1b2738;
+  --info: #93c5fd;
   color-scheme: dark;
 }
 
