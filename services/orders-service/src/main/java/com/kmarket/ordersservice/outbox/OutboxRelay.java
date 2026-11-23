@@ -63,9 +63,11 @@ public class OutboxRelay {
                         .get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 event.setPublishedAt(OffsetDateTime.now());
             }
-        } catch (Exception ex) {
-            // Roll back: published_at stays null, the batch is retried on the next tick.
+        } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            throw new OutboxPublishException("Interrupted while publishing order events", ex);
+        } catch (Exception ex) {
+            // Kafka indisponible, timeout... : rollback, le lot est retenté au tick suivant.
             throw new OutboxPublishException("Failed to publish order events to Kafka", ex);
         }
 

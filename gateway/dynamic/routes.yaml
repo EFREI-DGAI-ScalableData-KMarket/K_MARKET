@@ -34,6 +34,12 @@ http:
       rule: "PathPrefix(`/v1/auth`) || PathPrefix(`/v1/admin`)"
       service: auth
 
+    orders:
+      rule: "PathPrefix(`/v1/orders`)"
+      entryPoints: [web]
+      middlewares: [rate-limit]   
+      service: orders
+
 
     ui:
       rule: "PathPrefix(`/`)"
@@ -63,6 +69,12 @@ http:
       loadBalancer: 
         servers: 
           - url: "http://auth-service:8005"
+
+
+    orders:
+      loadBalancer:
+        servers:
+          - url: "http://orders-service:8001"
 
     ui:
       loadBalancer:
