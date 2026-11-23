@@ -12,6 +12,10 @@ import { OverviewPage } from '../features/overview/OverviewPage';
 import { ObservabilityPage } from '../features/observability/ObservabilityPage';
 import { LogisticsPage } from '../features/logistics/LogisticsPage';
 import { OrdersPage } from '../features/orders/OrdersPage';
+import { ShopLayout } from '../features/shop/ShopLayout';
+import { ShopHome } from '../features/shop/ShopHome';
+import { ProductPage } from '../features/shop/ProductPage';
+import { CartPage } from '../features/shop/CartPage';
 
 /**
  * Espace de gestion : session valide (au besoin renouvelée) ET rôle de l'équipe.
@@ -39,8 +43,16 @@ function guard(tab: Tab, page: ReactElement) {
 }
 
 export const router = createBrowserRouter([
-  // Boutique (D9) : à venir. En attendant, la racine mène à l'espace de gestion.
-  { path: '/', loader: () => redirect(GESTION) },
+  // Boutique publique (D9) : sans connexion ; lecture publique du catalogue (D8).
+  {
+    path: '/',
+    element: <ShopLayout />,
+    children: [
+      { index: true, element: <ShopHome /> },
+      { path: 'produit/:id', element: <ProductPage /> },
+      { path: 'panier', element: <CartPage /> },
+    ],
+  },
   { path: GESTION_LOGIN, element: <LoginPage />, loader: skipIfLoggedIn, HydrateFallback: () => null },
   {
     path: GESTION,
