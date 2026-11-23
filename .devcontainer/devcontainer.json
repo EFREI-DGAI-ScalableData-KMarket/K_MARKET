@@ -1,0 +1,14 @@
+{
+  "name": "K-Market",
+  // Image Ubuntu légère au lieu de l'image universal (~20 Go sur le disque du Codespace)
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "os-provided" },
+    // Seulement pour ./mvnw test hors Docker ; retirer si on ne lance Java que via Docker
+    "ghcr.io/devcontainers/features/java:1": { "version": "25" }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends make jq && python3 -m venv .venv && .venv/bin/pip install faker httpx",
+  "forwardPorts": [5173, 8000, 3000, 16686]
+}
