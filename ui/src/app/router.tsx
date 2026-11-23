@@ -6,12 +6,12 @@ import { ensureSession, getRoles, logout } from '../auth/auth';
 import { canTab, isInternal, type Tab } from '../auth/permissions';
 import { CatalogPage } from '../features/catalog/CatalogPage';
 import { AccessPage } from '../features/access/AccessPage';
-import { Pending } from '../pages/Pending';
 import { LoginPage } from '../pages/LoginPage';
 import { AccessDenied } from '../pages/AccessDenied';
 import { OverviewPage } from '../features/overview/OverviewPage';
 import { ObservabilityPage } from '../features/observability/ObservabilityPage';
 import { LogisticsPage } from '../features/logistics/LogisticsPage';
+import { OrdersPage } from '../features/orders/OrdersPage';
 
 /**
  * Espace de gestion : session valide (au besoin renouvelée) ET rôle de l'équipe.
@@ -49,7 +49,7 @@ export const router = createBrowserRouter([
     HydrateFallback: () => null,
     children: [
       { index: true, element: guard('overview', <OverviewPage />) },
-      { path: 'commandes', element: guard('orders', <Pending title="Commandes" waitingFor="services Commandes et Paiement" />) },
+      { path: 'commandes', element: guard('orders', <OrdersPage />) },
       { path: 'catalogue', element: guard('catalog', <CatalogPage />) },
       { path: 'logistique', element: guard('logistics', <LogisticsPage />) },
       { path: 'observabilite', element: guard('observability', <ObservabilityPage />) },

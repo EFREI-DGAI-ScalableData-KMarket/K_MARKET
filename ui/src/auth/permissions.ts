@@ -47,6 +47,8 @@ const RULES = {
   'shipments.read': ['admin', 'logistics', 'analyst'],
   'shipments.update': ['admin', 'logistics'],
   'users.manage': ['admin'],
+  'orders.prepare': ['admin', 'logistics'],
+  'orders.cancel': ['admin'],
 } satisfies Record<string, Role[]>;
 
 export type Permission = keyof typeof RULES;
@@ -58,6 +60,8 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   'shipments.read': 'Voir les expéditions',
   'shipments.update': 'Faire avancer une expédition',
   'users.manage': 'Gérer les comptes et les rôles',
+  'orders.prepare': 'Passer une commande en préparation',
+  'orders.cancel': 'Annuler une commande',
 };
 
 const allowedRoles = (key: Tab | Permission): readonly Role[] =>

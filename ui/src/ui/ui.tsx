@@ -18,7 +18,7 @@ export function Button({ variant = 'secondary', className = '', ...props }: Butt
   );
 }
 
-type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'neutral';
+export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'neutral' | 'accent';
 
 const TONES: Record<Tone, string> = {
   ok: 'bg-ok-bg text-ok',
@@ -26,6 +26,7 @@ const TONES: Record<Tone, string> = {
   bad: 'bg-bad-bg text-bad',
   info: 'bg-info-bg text-info',
   neutral: 'bg-surface-2 text-muted',
+  accent: 'bg-accent text-accent-ink', // plein : statut qui attend une action
 };
 
 export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {
