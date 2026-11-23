@@ -21,3 +21,15 @@ export function useCreateAccount() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }
+
+/**
+ * DELETE /admin/api-keys/{id} : le service ne peut plus échanger cette clé contre un jeton.
+ * Les jetons déjà émis restent valides jusqu'à leur expiration (15 min) : le JWT n'est pas révocable.
+ */
+export function useRevokeApiKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => http<void>(`/v1/admin/api-keys/${id}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'api-keys'] }),
+  });
+}

@@ -12,7 +12,7 @@ import {
   type Tab,
 } from '../../auth/permissions';
 import { Badge, Button, Notice, fieldClass } from '../../ui/ui';
-import { useAccounts, useApiKeys, useCreateAccount, useRoles, type Account } from './api';
+import { useAccounts, useApiKeys, useCreateAccount, useRevokeApiKey, useRoles, type Account } from './api';
 
 const DATE = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short' });
 const when = (iso: string | null) => (iso ? DATE.format(new Date(iso)) : '—');
@@ -227,30 +227,37 @@ function CreateAccount({ onDone }: { onDone: () => void }) {
   );
 }
 
-/** Table auth.api_keys : seule l'empreinte SHA-256 est stockée, la clé n'est jamais affichée. */
+/** Table auth.api_keys : seule l'empreinte SHA-256 est stockée, la clé n'est jamais affichée. Révocation en deux clics. */
 function ApiKeys() {
   const keys = useApiKeys();
   const roles = useRoles();
+  const revoke = useRevokeApiKey();
+  const [confirming, setConfirming] = useState<number | null>(null);
   const roleName = new Map(roles.data?.map((r) => [r.id, r.name]));
 
   return (
-    <Card title="Comptes techniques" hint="Table auth.api_keys : une clé d'API par service, échangée contre un jeton court (POST /v1/auth/token). Seule l'empreinte de la clé est stockée.">
+    <Card
+      title="Comptes techniques"
+      hint="Table auth.api_keys : une clé d'API par service, échangée contre un jeton court (POST /v1/auth/token). Seule l'empreinte de la clé est stockée. Une clé révoquée ne permet plus d'obtenir de jeton ; ceux déjà émis expirent au bout de 15 min."
+    >
       {keys.error && <Notice tone="bad">{keys.error.message}</Notice>}
+      {revoke.error && <Notice tone="bad">{revoke.error.message}</Notice>}
       <div className="overflow-x-auto rounded-2xl border border-line">
-        <table className="w-full min-w-[480px] border-collapse text-sm">
+        <table className="w-full min-w-[640px] border-collapse text-sm">
           <thead>
             <tr className="bg-surface-2 text-left text-xs text-muted">
               <th className="px-4 py-2.5 font-semibold">Service</th>
               <th className="px-4 py-2.5 font-semibold">Rôle</th>
               <th className="px-4 py-2.5 font-semibold">Statut</th>
               <th className="px-4 py-2.5 font-semibold">Créée le</th>
+              <th className="px-4 py-2.5 font-semibold">Action</th>
             </tr>
           </thead>
           <tbody>
             {keys.isPending ? (
-              <EmptyRow cols={4} text="Chargement…" />
+              <EmptyRow cols={5} text="Chargement…" />
             ) : (keys.data ?? []).length === 0 ? (
-              <EmptyRow cols={4} text="Aucune clé." />
+              <EmptyRow cols={5} text="Aucune clé." />
             ) : (
               keys.data!.map((k) => (
                 <tr key={k.id} className="border-t border-line">
@@ -262,6 +269,34 @@ function ApiKeys() {
                   </td>
                   <td className="px-4 py-2.5">{k.is_active ? <Badge tone="ok">Active</Badge> : <Badge>Révoquée</Badge>}</td>
                   <td className="px-4 py-2.5 text-muted">{when(k.created_at)}</td>
+                  <td className="px-4 py-2">
+                    {!k.is_active ? (
+                      <span className="text-xs text-muted">—</span>
+                    ) : confirming === k.id ? (
+                      <div className="flex flex-col items-start gap-1.5">
+                        <span className="text-xs text-bad">
+                          <code>{k.name}</code> ne pourra plus obtenir de jeton.
+                        </span>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="danger"
+                            className="min-h-9 px-3 text-sm"
+                            disabled={revoke.isPending}
+                            onClick={() => revoke.mutate(k.id, { onSettled: () => setConfirming(null) })}
+                          >
+                            {revoke.isPending ? '…' : 'Confirmer'}
+                          </Button>
+                          <Button className="min-h-9 px-3 text-sm" onClick={() => setConfirming(null)}>
+                            Garder
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button variant="danger" className="min-h-9 px-3 text-sm" onClick={() => setConfirming(k.id)}>
+                        Révoquer
+                      </Button>
+                    )}
+                  </td>
                 </tr>
               ))
             )}
