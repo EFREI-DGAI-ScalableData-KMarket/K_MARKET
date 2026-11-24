@@ -6,10 +6,12 @@ import com.kmarket.ordersservice.dto.OrderListResponse;
 import com.kmarket.ordersservice.dto.OrderResponse;
 import com.kmarket.ordersservice.dto.OrderStatusUpdateRequest;
 import com.kmarket.ordersservice.exception.ApiException;
+import com.kmarket.ordersservice.security.OrderOwnership;
 import com.kmarket.ordersservice.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,6 +38,7 @@ public class OrderController {
     private static final int MAX_LIMIT = 200;
 
     private final OrderService orderService;
+    private final OrderOwnership orderOwnership;
 
     /**
      * {@code GET /orders} — lists recent orders, optionally filtered by
@@ -65,10 +68,15 @@ public class OrderController {
      * <p>The {@code Idempotency-Key} header (a UUID) makes retries safe: replaying the
      * same key returns the order created the first time instead of a duplicate. The
      * order, its lines and the idempotency record are written in one transaction.</p>
+     *
+     * <p>Ownership: a regular caller may only order for their own account (JWT
+     * {@code sub} must equal {@code customer_id}); {@code service_account} / {@code admin}
+     * may order for any customer (Saga / tooling). See {@link OrderOwnership}.</p>
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public OrderResponse createOrder(
+            Authentication authentication,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody OrderCreateRequest request) {
 
@@ -81,6 +89,8 @@ public class OrderController {
         } catch (IllegalArgumentException ex) {
             throw ApiException.badRequest("Idempotency-Key must be a UUID");
         }
+
+        orderOwnership.assertCanCreateFor(authentication, request.customerId());
 
         return orderService.createOrder(key, request);
     }

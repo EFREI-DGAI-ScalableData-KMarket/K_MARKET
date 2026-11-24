@@ -172,10 +172,18 @@ public class OrderService {
      */
     @Transactional
     public OrderResponse createOrder(String idempotencyKey, OrderCreateRequest request) {
-        // 1. Idempotency replay: same key -> return the order created the first time.
+        String requestHash = requestHash(request);
+
+        // 1. Idempotency replay. Same key must mean the same request:
+        //    - identical payload -> return the order created the first time (safe retry);
+        //    - different payload -> 409, the key is being reused for a different order.
         var existing = idempotencyKeyRepository.findById(idempotencyKey);
         if (existing.isPresent()) {
             IdempotencyKey key = existing.get();
+            if (key.getRequestHash() != null && !key.getRequestHash().equals(requestHash)) {
+                throw ApiException.conflict(
+                        "Idempotency-Key already used with a different request payload");
+            }
             return orderRepository.findById(key.getOrderId())
                     .map(OrderResponse::from)
                     .orElseThrow(() -> ApiException.conflict(
@@ -226,7 +234,7 @@ public class OrderService {
         //    on the primary key and surfaces as a 409 conflict.
         try {
             idempotencyKeyRepository.saveAndFlush(
-                    new IdempotencyKey(idempotencyKey, order.getId(), order.getCreatedAt()));
+                    new IdempotencyKey(idempotencyKey, order.getId(), order.getCreatedAt(), requestHash));
         } catch (DataIntegrityViolationException ex) {
             throw ApiException.conflict("Order already created for this Idempotency-Key");
         }
@@ -240,6 +248,30 @@ public class OrderService {
     }
 
 
+
+    /**
+     * Stable fingerprint of a create request used to detect {@code Idempotency-Key} reuse
+     * with a different payload. The representation is canonical (customer id plus the
+     * {@code product_id:quantity} lines sorted by product id), so item ordering does not
+     * change the hash.
+     */
+    private String requestHash(OrderCreateRequest request) {
+        StringBuilder canonical = new StringBuilder();
+        canonical.append("customer=").append(request.customerId()).append(';');
+        request.items().stream()
+                .sorted(Comparator.comparing(OrderCreateRequest.Item::productId))
+                .forEach(item -> canonical.append(item.productId())
+                        .append(':').append(item.quantity()).append(','));
+
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException ex) {
+            // SHA-256 is mandated by the JDK; this cannot happen on a standard runtime.
+            throw new IllegalStateException("SHA-256 not available", ex);
+        }
+    }
 
     private Specification<Order> buildSpecification(String status, Integer customerId) {
         return (root, query, cb) -> {

@@ -6,6 +6,7 @@ import com.kmarket.ordersservice.dto.OrderListResponse;
 import com.kmarket.ordersservice.dto.OrderResponse;
 import com.kmarket.ordersservice.exception.ApiException;
 import com.kmarket.ordersservice.exception.GlobalExceptionHandler;
+import com.kmarket.ordersservice.security.OrderOwnership;
 import com.kmarket.ordersservice.service.OrderService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,7 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * exercised, while the {@link OrderService} collaborator is mocked.</p>
  */
 @WebMvcTest(OrderController.class)
-@Import({SecurityConfig.class, GlobalExceptionHandler.class})
+@Import({SecurityConfig.class, GlobalExceptionHandler.class, OrderOwnership.class})
 @TestPropertySource(properties = "app.jwt.secret=kmarket-local-development-jwt-secret-32chars")
 class OrderControllerTest {
 
@@ -187,6 +188,74 @@ class OrderControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"customer_id":42,"items":[]}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "analyst")
+    void createOrder_forAnotherCustomer_returnsForbidden() throws Exception {
+        // Authenticated as subject 42 but ordering for customer 99 → ownership violation.
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customer_id":99,"items":[{"product_id":101,"quantity":1}]}"""))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "7", roles = "service_account")
+    void createOrder_privilegedRole_mayOrderForAnotherCustomer() throws Exception {
+        // service_account (Saga / tooling) is subject 7 but may order for customer 99.
+        String key = UUID.randomUUID().toString();
+        OrderResponse created = new OrderResponse(1, 99, "paid", 990,
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"));
+        when(orderService.createOrder(eq(key), any())).thenReturn(created);
+
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customer_id":99,"items":[{"product_id":101,"quantity":1}]}"""))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.customer_id").value(99));
+
+        verify(orderService).createOrder(eq(key), any());
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "analyst")
+    void createOrder_quantityAboveMaximum_returnsBadRequest() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customer_id":42,"items":[{"product_id":101,"quantity":10001}]}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "analyst")
+    void createOrder_quantityZero_returnsBadRequest() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"customer_id":42,"items":[{"product_id":101,"quantity":0}]}"""))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
 

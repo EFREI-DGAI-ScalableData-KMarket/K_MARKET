@@ -45,6 +45,7 @@ CREATE TABLE orders.idempotency_keys (
     idempotency_key   TEXT        PRIMARY KEY,   -- en-tête Idempotency-Key envoyé par le client
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,
+    request_hash      TEXT,                      -- empreinte de la requête : même clé + requête différente -> 409
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     FOREIGN KEY (order_id, order_created_at)
         REFERENCES orders.orders (id, created_at) ON DELETE CASCADE

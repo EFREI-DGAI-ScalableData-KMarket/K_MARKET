@@ -93,12 +93,19 @@ explain:         ## Démo EXPLAIN avant/après index (après make reseed ORDERS=
 # Ces migrations ajoutent ce qui manque aux bases existantes et sont rejouables.
 migrate: .env    ## Applique toutes les migrations idempotentes (lancé aussi par `make up`)
 	$(MAKE) migrate-orders-outbox
+	$(MAKE) migrate-idempotency-hash
 
 migrate-orders-outbox: .env  ## Crée orders.outbox + droits si absents (transactional outbox)
 	@echo "Attente de PostgreSQL..."
 	@until docker compose exec -T postgres pg_isready -U postgres -d kmarket -q; do sleep 1; done
 	docker compose exec -T postgres psql -U postgres -d kmarket -v ON_ERROR_STOP=1 -X \
 	  < data/postgres/migrations/2026_add_orders_outbox.sql
+
+migrate-idempotency-hash: .env  ## Ajoute idempotency_keys.request_hash si absent (même clé + requête différente -> 409)
+	@echo "Attente de PostgreSQL..."
+	@until docker compose exec -T postgres pg_isready -U postgres -d kmarket -q; do sleep 1; done
+	docker compose exec -T postgres psql -U postgres -d kmarket -v ON_ERROR_STOP=1 -X \
+	  < data/postgres/migrations/2026_add_idempotency_request_hash.sql
 
 backup:          ## Sauvegarde PostgreSQL + MongoDB dans backups/
 	./scripts/backup.sh

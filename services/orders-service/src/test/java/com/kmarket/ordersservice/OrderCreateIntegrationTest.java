@@ -116,6 +116,46 @@ class OrderCreateIntegrationTest {
     }
 
     @Test
+    void createOrder_sameKeyDifferentRequest_returnsConflict() {
+        String key = UUID.randomUUID().toString();
+        OrderResponse first = orderService.createOrder(key, new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 1))));
+
+        // Same key, different payload (quantity changed) -> 409, not a silent replay.
+        var differentRequest = new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 5)));
+
+        assertThatThrownBy(() -> orderService.createOrder(key, differentRequest))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.CONFLICT));
+
+        // The original order is untouched and no second order/event was created.
+        assertThat(orderRepository.count()).isEqualTo(1);
+        assertThat(orderRepository.findById(first.id())).isPresent();
+        assertThat(outboxEventRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void createOrder_sameKeyRequestReordered_isStillIdempotentReplay() {
+        String key = UUID.randomUUID().toString();
+        var request = new OrderCreateRequest(customerId, List.of(
+                new OrderCreateRequest.Item(101, 2),
+                new OrderCreateRequest.Item(202, 1)));
+        // Same lines, different order: the canonical hash must match -> safe replay.
+        var reordered = new OrderCreateRequest(customerId, List.of(
+                new OrderCreateRequest.Item(202, 1),
+                new OrderCreateRequest.Item(101, 2)));
+
+        OrderResponse first = orderService.createOrder(key, request);
+        OrderResponse replay = orderService.createOrder(key, reordered);
+
+        assertThat(replay.id()).isEqualTo(first.id());
+        assertThat(orderRepository.count()).isEqualTo(1);
+        assertThat(outboxEventRepository.count()).isEqualTo(1);
+    }
+
+    @Test
     void createOrder_unknownCustomer_isRejectedAndRollsBack() {
         String key = UUID.randomUUID().toString();
         var request = new OrderCreateRequest(999_999,
