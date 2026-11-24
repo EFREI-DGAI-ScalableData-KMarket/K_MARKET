@@ -26,14 +26,7 @@ jobs:
 
       - name: "Générer le .env (depuis .env.example : secrets aléatoires, autres valeurs reprises)"
         run: |
-          while IFS= read -r line; do
-            case "$line" in ''|\#*) continue ;; esac          # lignes vides et commentaires
-            key="${line%%=*}"
-            case "$key" in
-              *PASSWORD|*_KEY|*SECRET) echo "$key=$(openssl rand -hex 24)" ;;
-              *) echo "$line" ;;
-            esac
-          done < .env.example > .env
+          bash scripts/gen-env.sh > .env
           echo "SEED_ORDERS=2000" >> .env                      # seed réduit pour la CI
 
       - name: Construire et démarrer la pile (bases, seed, services, gateway)
