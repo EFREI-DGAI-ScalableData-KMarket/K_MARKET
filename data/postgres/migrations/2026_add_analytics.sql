@@ -69,5 +69,6 @@ ALTER ROLE dashboard_svc PASSWORD :'dashboard_password';
 GRANT CONNECT ON DATABASE kmarket TO dashboard_svc;
 GRANT USAGE ON SCHEMA analytics TO dashboard_svc;
 GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO dashboard_svc;
-
+CREATE INDEX IF NOT EXISTS idx_demand_minute_updated ON analytics.demand_minute (updated_at);
+CREATE INDEX IF NOT EXISTS idx_kpi_minute_updated ON analytics.kpi_minute (updated_at);
 COMMIT;
