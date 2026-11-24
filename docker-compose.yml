@@ -97,6 +97,31 @@ services:
       postgres:
         condition: service_healthy
 
+  # API de la Vue d'ensemble (REST, FastAPI) : lit le schéma analytics écrit par le job Spark temps réel.
+  dashboard-service:
+    build: ./services/dashboard-service
+    container_name: dashboard-service
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dashboard_svc
+      POSTGRES_PASSWORD: ${DASHBOARD_DB_PASSWORD:?voir .env}
+      POSTGRES_DB: kmarket
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+      OTEL_SERVICE_NAME: dashboard-service
+      OTEL_TRACES_EXPORTER: otlp_proto_http
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: "metrics,health"
+    ports:
+      - "127.0.0.1:8006:8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        
   # Service Catalogue (GraphQL)
   catalog-service:
     build: ./services/catalog-service

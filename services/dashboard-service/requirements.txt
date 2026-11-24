@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+psycopg[binary]
+PyJWT
+prometheus-fastapi-instrumentator
+# Traces OpenTelemetry (instrumentation automatique, envoi OTLP/HTTP vers Jaeger)
+opentelemetry-distro
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-psycopg
+opentelemetry-instrumentation-logging

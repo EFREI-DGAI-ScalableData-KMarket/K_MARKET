@@ -42,6 +42,11 @@ http:
       middlewares: [rate-limit]   
       service: orders
 
+    dashboard:
+      rule: "PathPrefix(`/v1/dashboard`)"
+      entryPoints: [web]
+      middlewares: [rate-limit]
+      service: dashboard
 
     ui:
       rule: "PathPrefix(`/`)"
@@ -77,6 +82,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://orders-service:8001"
+
+    dashboard:
+      loadBalancer:
+        servers:
+          - url: "http://dashboard-service:8006"
 
     ui:
       loadBalancer:

@@ -24,3 +24,7 @@ scrape_configs:
 
   - job_name: kafka                      # kafka-exporter (profil "stream") : DOWN si le streaming n'est pas lancé
     static_configs: [{ targets: ["kafka-exporter:9308"] }]
+
+  - job_name: dashboard
+    static_configs:
+      - targets: ["dashboard-service:8006"]

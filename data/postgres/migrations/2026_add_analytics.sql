@@ -43,8 +43,31 @@ CREATE TABLE IF NOT EXISTS analytics.stock_alerts (
     updated_at       TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_stock_alerts_active ON analytics.stock_alerts (minutes_left) WHERE active;
+
+-- Remplissage de chaque entrepôt : dernier état connu (inventory.stock-changed), alerte au-dessus de 90 %.
+CREATE TABLE IF NOT EXISTS analytics.warehouse_fill (
+    warehouse_id   INTEGER      PRIMARY KEY,
+    used_units     INTEGER      NOT NULL,
+    capacity_units INTEGER      NOT NULL CHECK (capacity_units > 0),
+    fill_rate      NUMERIC(5,4) NOT NULL,          -- de 0 à 1
+    near_full      BOOLEAN      NOT NULL,          -- fill_rate > 0,90
+    measured_at    TIMESTAMPTZ  NOT NULL,          -- heure de l'événement le plus récent pris en compte
+    near_full_since TIMESTAMPTZ,                   -- début de la saturation en cours ; NULL si normal
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
 -- Moindre privilège : analytics_svc ne voit que son schéma, sans pouvoir supprimer ni créer de table.
 GRANT USAGE ON SCHEMA analytics TO analytics_svc;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA analytics TO analytics_svc;
+
+-- API de la Vue d'ensemble : lecture seule (moindre privilège ; seul le job Spark écrit, avec analytics_svc).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dashboard_svc') THEN
+    CREATE ROLE dashboard_svc LOGIN;
+  END IF;
+END $$;
+ALTER ROLE dashboard_svc PASSWORD :'dashboard_password';
+GRANT CONNECT ON DATABASE kmarket TO dashboard_svc;
+GRANT USAGE ON SCHEMA analytics TO dashboard_svc;
+GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO dashboard_svc;
 
 COMMIT;

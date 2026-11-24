@@ -30,4 +30,16 @@ CREATE TABLE IF NOT EXISTS analytics.stock_alerts (
     updated_at       TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_stock_alerts_active ON analytics.stock_alerts (minutes_left) WHERE active;
+
+-- Remplissage de chaque entrepôt : dernier état connu (inventory.stock-changed), alerte au-dessus de 90 %.
+CREATE TABLE IF NOT EXISTS analytics.warehouse_fill (
+    warehouse_id   INTEGER      PRIMARY KEY,
+    used_units     INTEGER      NOT NULL,
+    capacity_units INTEGER      NOT NULL CHECK (capacity_units > 0),
+    fill_rate      NUMERIC(5,4) NOT NULL,          -- de 0 à 1
+    near_full      BOOLEAN      NOT NULL,          -- fill_rate > 0,90
+    measured_at    TIMESTAMPTZ  NOT NULL,          -- heure de l'événement le plus récent pris en compte
+    near_full_since TIMESTAMPTZ,                   -- début de la saturation en cours ; NULL si normal
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
 COMMIT;

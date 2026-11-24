@@ -1,17 +1,23 @@
-"""Volet 4, étape 1 : lire orders.events et inventory.stock-changed, parser le JSON, afficher dans la console.
+"""Volet 4 : job temps réel.
 
-Lancement : voir spark/README.md. Le dossier spark/ est monté en lecture seule dans /opt/spark-apps.
+Lit orders.events et inventory.stock-changed (Kafka), calcule par fenêtre d'une minute et écrit dans PostgreSQL
+(schéma analytics, par upsert) :
+  - kpi_minute      : commandes, CA, échecs de paiement (Vue d'ensemble)
+  - demand_minute   : demande nette par produit, puis stock_alerts (rupture proche, stock lu par l'API Stock)
+  - warehouse_fill  : dernier remplissage de chaque entrepôt, saturation au-dessus de 90 %
+
+Lancement : make realtime. Le dossier spark/ est monté en lecture seule dans /opt/spark-apps.
 """
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, sum as sum_, when, window
-from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-
-import os
-import psycopg
 import logging
+import os
 import time
 
 import httpx
+import psycopg
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, max as max_, max_by, sum as sum_, when, window
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+from datetime import datetime, timezone
 
 BOOTSTRAP = "kafka:19092"  # listener INTERNAL
 
@@ -54,20 +60,7 @@ AUTH_URL = os.environ["AUTH_URL"]
 API_KEY = os.environ["STREAM_CONSUMER_API_KEY"]
 HORIZON_MINUTES = 5      # rythme de vente calculé sur les 5 dernières minutes
 ALERT_MINUTES = 30       # alerte si le stock tient moins de 30 minutes à ce rythme
-
-KPI_UPSERT = """
-INSERT INTO analytics.kpi_minute (window_start, window_end, orders_placed, orders_paid, revenue_cents, payments_failed, updated_at)
-VALUES (%s, %s, %s, %s, %s, %s, now())
-ON CONFLICT (window_start) DO UPDATE SET
-  orders_placed = EXCLUDED.orders_placed, orders_paid = EXCLUDED.orders_paid,
-  revenue_cents = EXCLUDED.revenue_cents, payments_failed = EXCLUDED.payments_failed, updated_at = now()
-"""
-
-DEMAND_UPSERT = """
-INSERT INTO analytics.demand_minute (window_start, window_end, product_id, net_units, updated_at)
-VALUES (%s, %s, %s, %s, now())
-ON CONFLICT (window_start, product_id) DO UPDATE SET net_units = EXCLUDED.net_units, updated_at = now()
-"""
+NEAR_FULL = 0.90          # saturation proche au-dessus de 90 % (sujet, onglet Logistique)
 
 
 
@@ -104,6 +97,20 @@ def demand_per_minute(stock):
             .groupBy(window("occurred_at", WINDOW), "product_id")
             .agg((-sum_("delta")).alias("net_units")))
 
+
+def warehouse_fill(stock):
+    """Dernier remplissage connu de chaque entrepôt : chaque événement porte used/capacity après la modification."""
+    return (stock
+            .withWatermark("occurred_at", WATERMARK)
+            .dropDuplicatesWithinWatermark(["event_id"])
+            .groupBy(window("occurred_at", WINDOW), "warehouse_id")
+            .agg(max_("occurred_at").alias("measured_at"),
+                 max_by("warehouse_used_units", "occurred_at").alias("used_units"),
+                 max_by("warehouse_capacity_units", "occurred_at").alias("capacity_units"))
+            .withColumn("fill_rate", col("used_units") / col("capacity_units"))
+            .withColumn("near_full", col("fill_rate") > NEAR_FULL))
+
+
 _token = {"value": None, "expires": 0.0}
 
 
@@ -126,6 +133,20 @@ GROUP BY product_id
 HAVING SUM(net_units) > 0
 """
 
+KPI_UPSERT = """
+INSERT INTO analytics.kpi_minute (window_start, window_end, orders_placed, orders_paid, revenue_cents, payments_failed, updated_at)
+VALUES (%s, %s, %s, %s, %s, %s, now())
+ON CONFLICT (window_start) DO UPDATE SET
+  orders_placed = EXCLUDED.orders_placed, orders_paid = EXCLUDED.orders_paid,
+  revenue_cents = EXCLUDED.revenue_cents, payments_failed = EXCLUDED.payments_failed, updated_at = now()
+"""
+
+DEMAND_UPSERT = """
+INSERT INTO analytics.demand_minute (window_start, window_end, product_id, net_units, updated_at)
+VALUES (%s, %s, %s, %s, now())
+ON CONFLICT (window_start, product_id) DO UPDATE SET net_units = EXCLUDED.net_units, updated_at = now()
+"""
+
 ALERT_UPSERT = """
 INSERT INTO analytics.stock_alerts (product_id, remaining_units, units_per_minute, minutes_left, active, raised_at, updated_at)
 VALUES (%s, %s, %s, %s, %s, now(), now())
@@ -134,7 +155,20 @@ ON CONFLICT (product_id) DO UPDATE SET
   minutes_left = EXCLUDED.minutes_left, active = EXCLUDED.active, updated_at = now(),
   raised_at = CASE WHEN stock_alerts.active OR NOT EXCLUDED.active THEN stock_alerts.raised_at ELSE now() END
 """
-
+FILL_UPSERT = """
+INSERT INTO analytics.warehouse_fill
+  (warehouse_id, used_units, capacity_units, fill_rate, near_full, measured_at, near_full_since, updated_at)
+VALUES (%s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, now())
+ON CONFLICT (warehouse_id) DO UPDATE SET
+  used_units = EXCLUDED.used_units, capacity_units = EXCLUDED.capacity_units,
+  fill_rate = EXCLUDED.fill_rate, near_full = EXCLUDED.near_full,
+  measured_at = EXCLUDED.measured_at, updated_at = now(),
+  near_full_since = CASE
+    WHEN NOT EXCLUDED.near_full THEN NULL                          -- redevenu normal
+    WHEN warehouse_fill.near_full THEN warehouse_fill.near_full_since  -- déjà saturé : on garde le début
+    ELSE now() END                                                 -- vient de passer au-dessus de 90 %
+WHERE EXCLUDED.measured_at > warehouse_fill.measured_at              -- jamais un état plus ancien sur un plus récent
+"""
 
 def evaluate_stock_alerts(conn):
     """Rupture proche : rythme de vente (5 dernières minutes) comparé au stock restant lu par l'API Stock."""
@@ -157,6 +191,20 @@ def evaluate_stock_alerts(conn):
     selling_ids = [pid for pid, _ in selling] or [-1]
     conn.execute("UPDATE analytics.stock_alerts SET active = false, updated_at = now() "
                  "WHERE active AND NOT (product_id = ANY(%s))", (selling_ids,))
+
+def bootstrap_warehouse_fill():
+    """Chargement initial : l'état complet des entrepôts lu par l'API Stock, avant de suivre le flux.
+    Un entrepôt sans mouvement depuis le démarrage de Kafka a ainsi quand même sa ligne."""
+    taken_at = datetime.now(timezone.utc)   # avant l'appel : les événements plus récents s'appliqueront ensuite
+    r = httpx.get(f"{STOCK_URL}/warehouses", headers={"Authorization": f"Bearer {service_token()}"}, timeout=10)
+    r.raise_for_status()
+    rows = []
+    for w in r.json():
+        rate = w["used_units"] / w["capacity_units"]
+        rows.append((w["id"], w["used_units"], w["capacity_units"], rate, rate > NEAR_FULL, taken_at, rate > NEAR_FULL))
+    with psycopg.connect(DSN, options="-c TimeZone=UTC") as conn:
+        conn.cursor().executemany(FILL_UPSERT, rows)
+    log.info("chargement initial du remplissage : %d entrepôts", len(rows))
 
 
 def to_postgres(df, name: str, sql: str, columns: list[str], after=None):
@@ -190,10 +238,19 @@ def to_console(df, name: str, mode: str = "append"):
               .queryName(name).start())
 
 
+try:
+    bootstrap_warehouse_fill()
+except Exception:
+    # Stock ou Auth indisponible au démarrage : on suit quand même le flux (les entrepôts actifs apparaîtront).
+    log.exception("chargement initial du remplissage impossible")
+
 orders = read("orders.events", ORDER_EVENT)
 stock = read("inventory.stock-changed", STOCK_EVENT)
 to_postgres(orders_per_minute(orders), "kpi_orders", KPI_UPSERT,
             ["window_start", "window_end", "orders_placed", "orders_paid", "revenue_cents", "payments_failed"])
 to_postgres(demand_per_minute(stock), "demand", DEMAND_UPSERT,
             ["window_start", "window_end", "product_id", "net_units"], after=evaluate_stock_alerts)
+# near_full apparaît deux fois : la 2e alimente le CASE de near_full_since (paramètres positionnels).
+to_postgres(warehouse_fill(stock), "warehouse_fill", FILL_UPSERT,
+            ["warehouse_id", "used_units", "capacity_units", "fill_rate", "near_full", "measured_at", "near_full"])
 spark.streams.awaitAnyTermination()

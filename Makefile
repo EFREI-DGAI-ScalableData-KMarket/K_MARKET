@@ -134,4 +134,9 @@ realtime:        ## Lance le job Spark temps réel (lecture Kafka ; console pour
 migrate-analytics: .env  ## Crée le schéma analytics et le rôle analytics_svc (résultats de Spark), rejouable
 	@until docker compose exec -T postgres pg_isready -U postgres -d kmarket -q; do sleep 1; done
 	@set -a && . ./.env && set +a && docker compose exec -T postgres psql -U postgres -d kmarket -X \
-	  -v analytics_password="$$ANALYTICS_DB_PASSWORD" < data/postgres/migrations/2026_add_analytics.sql
+	  	  -v analytics_password="$$ANALYTICS_DB_PASSWORD" -v dashboard_password="$$DASHBOARD_DB_PASSWORD" < data/postgres/migrations/2026_add_analytics.sql
+
+
+test-dashboard: .env  ## Tests d'intégration du service Dashboard (pile lancée)
+	@set -a && . ./.env && set +a && python -m pytest services/dashboard-service/tests -q
+	
