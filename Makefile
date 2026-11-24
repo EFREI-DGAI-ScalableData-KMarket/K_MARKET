@@ -1,4 +1,4 @@
-.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs orders-logs orders-events psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock migrate migrate-orders-outbox
+.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs orders-logs orders-events psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock migrate migrate-orders-outbox realtime
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
@@ -12,6 +12,11 @@ define compose_up
 	docker compose $(1) up -d --build
 	$(MAKE) migrate
 endef
+
+SPARK_SUBMIT = docker compose exec spark-master /opt/spark/bin/spark-submit \
+	--master spark://spark-master:7077 \
+	--conf spark.jars.ivy=/tmp/.ivy2 \
+	--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.9
 
 up: .env         ## Démarre les bases + seed (rien d'autre)
 	$(call compose_up,)
@@ -120,5 +125,13 @@ test-catalog: .env   ## Tests d'intégration du service Catalogue (pile lancée 
 kafka-tail:      ## Événements Kafka en direct (make kafka-tail TOPIC=inventory.shipment-status-changed)
 	docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
 	  --topic $(or $(TOPIC),inventory.stock-changed) --from-beginning --property print.key=true
-traffic: .env    ## Trafic de démo vers la gateway (make traffic DURATION=300 RPS=10)
-	@set -a && . ./.env && set +a && python scripts/traffic.py --duration $(or $(DURATION),120) --rps $(or $(RPS),10)
+traffic: .env    ## Trafic de démo (make traffic DURATION=300 RPS=10 [SALES=1 HOT=23,154])
+	@set -a && . ./.env && set +a && python scripts/traffic.py --duration $(or $(DURATION),120) --rps $(or $(RPS),10) $(if $(SALES),--sales) $(if $(HOT),--hot $(HOT))
+
+realtime:        ## Lance le job Spark temps réel (lecture Kafka ; console pour l'instant)
+	$(SPARK_SUBMIT) /opt/spark-apps/streaming/realtime.py
+
+migrate-analytics: .env  ## Crée le schéma analytics et le rôle analytics_svc (résultats de Spark), rejouable
+	@until docker compose exec -T postgres pg_isready -U postgres -d kmarket -q; do sleep 1; done
+	@set -a && . ./.env && set +a && docker compose exec -T postgres psql -U postgres -d kmarket -X \
+	  -v analytics_password="$$ANALYTICS_DB_PASSWORD" < data/postgres/migrations/2026_add_analytics.sql

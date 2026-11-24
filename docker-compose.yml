@@ -396,8 +396,9 @@ services:
 
   # Spark : jobs de streaming (Kafka) et transformations du Data Lake
   # Image officielle Apache Spark (bitnami/spark a été retiré de Docker Hub mi-2025).
-  spark-master:
-    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+  spark-master:    
+    build: ./spark
+    image: kmarket-spark
     container_name: spark-master
     profiles: ["spark"]
     restart: unless-stopped
@@ -405,14 +406,20 @@ services:
     environment:
       SPARK_NO_DAEMONIZE: "true"
       SPARK_MASTER_HOST: spark-master
+      ANALYTICS_DSN: postgresql://analytics_svc:${ANALYTICS_DB_PASSWORD:?voir .env}@postgres:5432/kmarket
+    depends_on:
+      - postgres
     ports:
       - "127.0.0.1:7077:7077"   # URL du master (spark://spark-master:7077)
       - "127.0.0.1:8081:8080"   # interface web du master
+      - "127.0.0.1:4040:4040"   # interface du job en cours (Structured Streaming)
     volumes:
       - ./spark:/opt/spark-apps:ro
+      - sparkcheckpoints:/opt/spark-checkpoints
 
   spark-worker:
-    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+    build: ./spark
+    image: kmarket-spark
     container_name: spark-worker
     profiles: ["spark"]
     restart: unless-stopped
@@ -425,6 +432,7 @@ services:
       - spark-master
     volumes:
       - ./spark:/opt/spark-apps:ro
+      - sparkcheckpoints:/opt/spark-checkpoints
 
   
   ui:
@@ -438,3 +446,4 @@ volumes:
   kafkadata:
   miniodata:
   promdata:
+  sparkcheckpoints:
