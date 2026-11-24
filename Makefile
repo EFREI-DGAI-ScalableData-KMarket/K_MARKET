@@ -1,4 +1,4 @@
-.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs orders-logs orders-events psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock migrate migrate-orders-outbox migrate-idempotency-hash
+.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs orders-logs orders-events psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock migrate migrate-orders-outbox migrate-idempotency-hash migrate-order-items-product-name
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
@@ -94,6 +94,7 @@ explain:         ## Démo EXPLAIN avant/après index (après make reseed ORDERS=
 migrate: .env    ## Applique toutes les migrations idempotentes (lancé aussi par `make up`)
 	$(MAKE) migrate-orders-outbox
 	$(MAKE) migrate-idempotency-hash
+	$(MAKE) migrate-order-items-product-name
 
 migrate-orders-outbox: .env  ## Crée orders.outbox + droits si absents (transactional outbox)
 	@echo "Attente de PostgreSQL..."
@@ -106,6 +107,12 @@ migrate-idempotency-hash: .env  ## Ajoute idempotency_keys.request_hash si absen
 	@until docker compose exec -T postgres pg_isready -U postgres -d kmarket -q; do sleep 1; done
 	docker compose exec -T postgres psql -U postgres -d kmarket -v ON_ERROR_STOP=1 -X \
 	  < data/postgres/migrations/2026_add_idempotency_request_hash.sql
+
+migrate-order-items-product-name: .env  ## Ajoute order_items.product_name si absent (GET /orders n'appelle plus le Catalogue)
+	@echo "Attente de PostgreSQL..."
+	@until docker compose exec -T postgres pg_isready -U postgres -d kmarket -q; do sleep 1; done
+	docker compose exec -T postgres psql -U postgres -d kmarket -v ON_ERROR_STOP=1 -X \
+	  < data/postgres/migrations/2026_add_order_items_product_name.sql
 
 backup:          ## Sauvegarde PostgreSQL + MongoDB dans backups/
 	./scripts/backup.sh

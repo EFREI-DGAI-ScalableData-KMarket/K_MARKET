@@ -1,5 +1,7 @@
 package com.kmarket.ordersservice.service;
 
+import com.kmarket.ordersservice.catalog.CatalogProduct;
+import com.kmarket.ordersservice.catalog.ProductCatalog;
 import com.kmarket.ordersservice.domain.OrderStatus;
 import com.kmarket.ordersservice.dto.OrderCreateRequest;
 import com.kmarket.ordersservice.dto.OrderDetailResponse;
@@ -26,8 +28,16 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /** Business logic behind {@code GET /orders} and {@code POST /orders}. */
 @Service
@@ -45,8 +55,7 @@ public class OrderService {
     private final OrderItemRepository orderItemRepository;
     private final CustomerRepository customerRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
-    private final ProductPricer productPricer;
-    private final ProductNameResolver productNameResolver;
+    private final ProductCatalog productCatalog;
     private final OrderEventPublisher orderEventPublisher;
 
     /**
@@ -92,14 +101,18 @@ public class OrderService {
         OrderDetailResponse.Customer customerDto = customer == null ? null
                 : new OrderDetailResponse.Customer(customer.getId(), customer.getName(), customer.getEmail());
 
-        List<OrderDetailResponse.Item> items = orderItemRepository
-                .findByOrderIdOrderById(order.getId()).stream()
-                .map(line -> new OrderDetailResponse.Item(
-                        line.getProductId(),
-                        productNameResolver.productName(line.getProductId()),
-                        line.getQuantity(),
-                        line.getUnitPriceCents(),
-                        line.getUnitPriceCents() * line.getQuantity()))
+        List<OrderDetailResponse.Item> items = orderItemRepository.findByOrderIdOrderById(order.getId()).stream()
+                .map(line -> {
+                    String productName = line.getProductName() != null
+                            ? line.getProductName()
+                            : "Product #" + line.getProductId();
+                    return new OrderDetailResponse.Item(
+                            line.getProductId(),
+                            productName,
+                            line.getQuantity(),
+                            line.getUnitPriceCents(),
+                            line.getUnitPriceCents() * line.getQuantity());
+                })
                 .toList();
 
         return new OrderDetailResponse(
@@ -159,12 +172,13 @@ public class OrderService {
      *
      * <p>The whole method runs in a single transaction: either the order, all of its
      * {@code order_items} and the {@code idempotency_keys} row are committed together,
-     * or nothing is (rollback on any exception). Pricing is resolved via
-     * {@link ProductPricer} (the Catalog seam) and the per-line price is frozen into
-     * {@code order_items.unit_price_cents}.</p>
+     * or nothing is (rollback on any exception). Products are validated and priced via
+     * {@link com.kmarket.ordersservice.catalog.ProductCatalog} (the Catalog seam) and the
+     * per-line price is frozen into {@code order_items.unit_price_cents}.</p>
      *
-     * <p>Idempotency: if {@code idempotencyKey} was already used, the previously created
-     * order is returned unchanged (safe retry) instead of creating a duplicate.</p>
+     * <p>Idempotency: if {@code idempotencyKey} was already used with the <em>same</em>
+     * request, the previously created order is returned unchanged (safe retry); reusing
+     * the key with a <em>different</em> request payload is rejected with {@code 409}.</p>
      *
      * @param idempotencyKey the client-supplied {@code Idempotency-Key} header
      * @param request        the validated order payload
@@ -196,21 +210,30 @@ public class OrderService {
                     "UNPROCESSABLE", "Unknown customer_id " + request.customerId());
         }
 
-        // 3. Price every line via the Catalog seam and compute the total.
+        // 3. Validate products and fetch prices from the Catalog in a single call
+        Set<Integer> productIds = new LinkedHashSet<>();
+        request.items().forEach(item -> productIds.add(item.productId()));
+        Map<Integer, CatalogProduct> products = productCatalog.fetchByIds(productIds);
+
         long totalCents = 0;
         List<OrderItem> lines = new ArrayList<>(request.items().size());
         for (OrderCreateRequest.Item item : request.items()) {
-            Integer unitPrice = productPricer.unitPriceCents(item.productId());
-            if (unitPrice == null) {
+            CatalogProduct product = products.get(item.productId());
+            if (product == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                        "UNPROCESSABLE", "Unknown or unavailable product_id " + item.productId());
+                        "UNPROCESSABLE", "Unknown product_id " + item.productId());
+            }
+            if (!product.active()) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "UNPROCESSABLE", "Product " + item.productId() + " is no longer available");
             }
             OrderItem line = new OrderItem();
             line.setProductId(item.productId());
+            line.setProductName(product.name());
             line.setQuantity(item.quantity());
-            line.setUnitPriceCents(unitPrice);
+            line.setUnitPriceCents(product.priceCents());
             lines.add(line);
-            totalCents += (long) unitPrice * item.quantity();
+            totalCents += (long) product.priceCents() * item.quantity();
         }
         if (totalCents > Integer.MAX_VALUE) {
             throw ApiException.badRequest("Order total exceeds the supported maximum");

@@ -38,6 +38,7 @@ CREATE TABLE orders.order_items (
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,
     product_id        INTEGER     NOT NULL,
+    product_name      TEXT,
     quantity          INTEGER     NOT NULL CHECK (quantity > 0),
     unit_price_cents  INTEGER     NOT NULL CHECK (unit_price_cents >= 0),
     PRIMARY KEY (id, order_created_at),

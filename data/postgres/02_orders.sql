@@ -33,6 +33,7 @@ CREATE TABLE orders.order_items (
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,   -- recopiée pour la FK composite et le partitionnement
     product_id        INTEGER     NOT NULL,   -- lien logique -> MongoDB catalog.product_id
+    product_name      TEXT,                   -- nom figé au moment de la commande (lu du Catalogue), évite un appel à la lecture
     quantity          INTEGER     NOT NULL CHECK (quantity > 0),
     unit_price_cents  INTEGER     NOT NULL CHECK (unit_price_cents >= 0),  -- prix figé au moment de la commande
     PRIMARY KEY (id, order_created_at),

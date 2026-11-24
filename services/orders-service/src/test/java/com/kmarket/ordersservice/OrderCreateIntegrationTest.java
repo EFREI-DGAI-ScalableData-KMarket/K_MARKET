@@ -1,8 +1,10 @@
 package com.kmarket.ordersservice;
 
 import com.kmarket.ordersservice.dto.OrderCreateRequest;
+import com.kmarket.ordersservice.dto.OrderDetailResponse;
 import com.kmarket.ordersservice.dto.OrderResponse;
 import com.kmarket.ordersservice.entity.Customer;
+import com.kmarket.ordersservice.entity.OrderItem;
 import com.kmarket.ordersservice.event.OrderEvent;
 import com.kmarket.ordersservice.exception.ApiException;
 import com.kmarket.ordersservice.repository.CustomerRepository;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
@@ -29,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * (Testcontainers) PostgreSQL seeded with the {@code orders} schema.
  */
 @SpringBootTest
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, TestCatalogConfiguration.class})
 @TestPropertySource(properties = "orders.outbox.relay.enabled=false")
 class OrderCreateIntegrationTest {
 
@@ -94,6 +97,25 @@ class OrderCreateIntegrationTest {
                 .contains(OrderEvent.ORDER_PLACED)
                 .contains("\"order_id\"")
                 .contains(String.valueOf(created.id()));
+    }
+
+    @Test
+    void getOrder_returnsFrozenProductName_withoutCallingCatalog() {
+        String key = UUID.randomUUID().toString();
+        OrderResponse created = orderService.createOrder(key, new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 2))));
+
+        // The line stored product_name at creation time; getOrder reads it from the DB.
+        OrderItem storedLine = orderItemRepository.findByOrderIdOrderById(created.id()).get(0);
+        assertThat(storedLine.getProductName()).isEqualTo("Product #101");
+
+        OrderDetailResponse detail = orderService.getOrder(created.id());
+        assertThat(detail.items()).hasSize(1);
+        OrderDetailResponse.Item item = detail.items().get(0);
+        assertThat(item.productId()).isEqualTo(101);
+        assertThat(item.productName()).isEqualTo("Product #101");
+        assertThat(item.quantity()).isEqualTo(2);
+        assertThat(item.lineTotalCents()).isEqualTo(item.unitPriceCents() * 2);
     }
 
     @Test
