@@ -1,32 +1,185 @@
 import { useEffect, useState } from 'react';
+import { formatCents, formatRelative } from '../../lib/format';
 import { Badge, Button, Notice, fieldClass } from '../../ui/ui';
 import { useActiveProductCount, useProductsByIds } from '../catalog/api';
 import { CATEGORY_LABELS } from '../catalog/categories';
-import { useLowStock } from '../stock/api';
+import { useLowStock, useWarehouseNames } from '../stock/api';
 import { LOW_STOCK_THRESHOLD, stockLevel } from '../stock/levels';
+import { STALE_AFTER_MS, useDashboardSummary, type DashboardSummary } from './api';
+
+const HOUR = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', timeZone: 'Europe/Paris' });
+const plural = (n: number, word: string) => `${n.toLocaleString('fr-FR')} ${word}${n > 1 ? 's' : ''}`;
+const pct = (rate: number) => `${(rate * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`;
 
 export function OverviewPage() {
   const today = new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+  const summary = useDashboardSummary();
 
   return (
     <section className="flex flex-col gap-5">
-      <h1 className="m-0 text-[28px] font-extrabold tracking-tight">Aujourd'hui, {today}</h1>
-      <Kpis />
-      <Notice tone="neutral">Commandes par heure et alertes en direct : en attente du service Commandes, de Kafka et de Spark.</Notice>
+      <div className="flex flex-col gap-1">
+        <h1 className="m-0 text-[28px] font-extrabold tracking-tight">Aujourd'hui, {today}</h1>
+        <Freshness dataAsOf={summary.data?.data_as_of} />
+      </div>
+      {summary.error && <Notice tone="bad">{summary.error.message}</Notice>}
+      <Kpis today={summary.data?.today} />
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[3fr_2fr]">
+        <HourlyChart hourly={summary.data?.hourly} />
+        <LiveAlerts summary={summary.data} />
+      </div>
       <LowStock />
     </section>
   );
 }
 
-/** Les 4 chiffres du jour du sujet. Seul le taux de rupture a déjà sa source (services Catalogue et Stock). */
-function Kpis() {
-  const pending = 'En attente : service Commandes et Spark';
+/** Heure courante, mise à jour régulièrement : « il y a 3 min » doit vieillir même si les données ne changent pas. */
+function useNow(intervalMs: number) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+  return now;
+}
+
+/** Âge des données du flux temps réel ; avertissement si le job Spark n'écrit plus. */
+function Freshness({ dataAsOf }: { dataAsOf: string | null | undefined }) {
+  const now = useNow(5000);
+  if (dataAsOf === undefined) return null;
+  if (dataAsOf === null) return <Notice tone="neutral">Le flux temps réel n'a encore produit aucun chiffre aujourd'hui.</Notice>;
+  if (now - new Date(dataAsOf).getTime() > STALE_AFTER_MS) {
+    return (
+      <Notice tone="warn">
+        Flux temps réel interrompu : dernière mise à jour {formatRelative(dataAsOf, now)}. Les chiffres et les alertes ne sont plus à jour.
+      </Notice>
+    );
+  }
+  return <span className="text-xs text-muted">Flux temps réel (Kafka → Spark) · mis à jour {formatRelative(dataAsOf, now)}</span>;
+}
+
+/** Les 4 chiffres du jour du sujet : 3 viennent du flux temps réel, le taux de rupture des services Catalogue et Stock. */
+function Kpis({ today }: { today?: DashboardSummary['today'] }) {
   return (
     <section aria-label="Chiffres du jour" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <Kpi label="Commandes du jour" value="—" hint={pending} />
-      <Kpi label="Chiffre d'affaires" value="—" hint={pending} />
-      <Kpi label="Panier moyen" value="—" hint={pending} />
+      <Kpi
+        label="Commandes du jour"
+        value={today ? today.orders.toLocaleString('fr-FR') : '…'}
+        hint={today ? `${plural(today.orders_paid, 'payée')} · ${plural(today.payments_failed, 'paiement refusé')}` : 'Chargement'}
+      />
+      <Kpi label="Chiffre d'affaires" value={today ? formatCents(today.revenue_cents) : '…'} hint="Commandes payées depuis minuit" />
+      <Kpi
+        label="Panier moyen"
+        value={!today ? '…' : today.average_basket_cents === null ? '—' : formatCents(today.average_basket_cents)}
+        hint="Chiffre d'affaires ÷ commandes payées"
+      />
       <StockoutKpi />
+    </section>
+  );
+}
+
+/** Commandes heure par heure depuis minuit (heure de Paris) ; les heures sans commande sont affichées à zéro. */
+function HourlyChart({ hourly }: { hourly?: DashboardSummary['hourly'] }) {
+  const rows = fillHours(hourly ?? []);
+  const max = Math.max(1, ...rows.map((h) => h.orders));
+
+  return (
+    <section className="flex flex-col gap-4 rounded-[22px] border border-line bg-surface p-5">
+      <div className="flex flex-col">
+        <h2 className="m-0 text-[17px] font-bold">Commandes par heure</h2>
+        <span className="text-xs text-muted">Depuis minuit · calculé par Spark à partir des événements Kafka</span>
+      </div>
+      {!hourly ? (
+        <p className="m-0 text-muted">Chargement…</p>
+      ) : rows.length === 0 ? (
+        <p className="m-0 text-muted">Pas encore de commande aujourd'hui.</p>
+      ) : (
+        <div
+          role="img"
+          aria-label={`Commandes par heure : ${rows.map((h) => `${HOUR.format(new Date(h.hour))} ${h.orders}`).join(', ')}`}
+          className="flex h-52 items-end gap-1.5"
+        >
+          {rows.map((h) => (
+            <div
+              key={h.hour}
+              title={`${HOUR.format(new Date(h.hour))} : ${plural(h.orders, 'commande')} · ${formatCents(h.revenue_cents)}`}
+              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1"
+            >
+              <span className="text-[11px] font-semibold tabular-nums">{h.orders || ''}</span>
+              <div className="w-full max-w-10 rounded-t-lg bg-accent" style={{ height: `${(h.orders / max) * 80}%` }} />
+              <span className="text-[11px] text-muted">{HOUR.format(new Date(h.hour))}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Complète les heures manquantes entre la première et la dernière heure reçues (une heure sans commande = 0). */
+function fillHours(hourly: DashboardSummary['hourly']) {
+  if (hourly.length === 0) return [];
+  const byHour = new Map(hourly.map((h) => [new Date(h.hour).getTime(), h]));
+  const first = new Date(hourly[0].hour).getTime();
+  const last = new Date(hourly[hourly.length - 1].hour).getTime();
+  const rows: DashboardSummary['hourly'] = [];
+  for (let t = first; t <= last; t += 3_600_000) {
+    rows.push(byHour.get(t) ?? { hour: new Date(t).toISOString(), orders: 0, revenue_cents: 0 });
+  }
+  return rows;
+}
+
+/** Alertes levées par le job temps réel : ruptures proches (la plus urgente d'abord) et entrepôts au-dessus de 90 %. */
+function LiveAlerts({ summary }: { summary?: DashboardSummary }) {
+  const alerts = summary?.stock_alerts ?? [];
+  const saturated = (summary?.warehouses ?? []).filter((w) => w.near_full);
+  const products = useProductsByIds(alerts.map((a) => a.product_id));
+  const byId = new Map(products.data?.map((p) => [p.product_id, p]));
+  const names = useWarehouseNames(saturated.length > 0);
+  const nameOf = new Map(names.data?.map((w) => [w.id, w.name]));
+  const count = alerts.length + saturated.length;
+
+  return (
+    <section aria-live="polite" className="flex flex-col gap-3 rounded-[22px] border border-line bg-surface p-5">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="m-0 text-[17px] font-bold">Alertes en direct</h2>
+        <span className={`text-sm font-semibold ${count ? 'text-bad' : 'text-muted'}`}>{count ? `${count} en cours` : 'Aucune'}</span>
+      </div>
+      {!summary ? (
+        <p className="m-0 text-muted">Chargement…</p>
+      ) : count === 0 ? (
+        <p className="m-0 text-sm text-muted">Aucune rupture proche ni entrepôt au-dessus de 90 %.</p>
+      ) : (
+        <ul className="m-0 flex max-h-[300px] list-none flex-col gap-2 overflow-y-auto p-0">
+          {alerts.map((a) => {
+            const p = byId.get(a.product_id);
+            return (
+              <li key={`p${a.product_id}`} className="flex items-center gap-3 rounded-2xl bg-bad-bg px-4 py-3">
+                {p?.image_url && <img src={p.image_url} alt="" className="size-10 shrink-0 rounded-lg object-cover" />}
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate font-semibold">{p?.name ?? `Produit #${a.product_id}`}</span>
+                  <span className="text-xs text-muted">
+                    Rupture proche · {plural(a.remaining_units, 'unité')} · {a.units_per_minute.toLocaleString('fr-FR')} vendues/min · depuis{' '}
+                    {formatRelative(a.raised_at).replace('il y a ', '')}
+                  </span>
+                </div>
+                <Badge tone="bad">{a.remaining_units === 0 ? 'Rupture' : `≈ ${Math.max(1, Math.round(a.minutes_left))} min`}</Badge>
+              </li>
+            );
+          })}
+          {saturated.map((w) => (
+            <li key={`w${w.warehouse_id}`} className="flex items-center gap-3 rounded-2xl bg-warn-bg px-4 py-3">
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-semibold">{nameOf.get(w.warehouse_id) ?? `Entrepôt #${w.warehouse_id}`}</span>
+                <span className="text-xs text-muted">
+                  Saturation proche · {w.used_units.toLocaleString('fr-FR')} / {w.capacity_units.toLocaleString('fr-FR')} unités
+                  {w.near_full_since && ` · depuis ${formatRelative(w.near_full_since).replace('il y a ', '')}`}
+                </span>
+              </div>
+              <Badge tone="warn">{pct(w.fill_rate)}</Badge>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
