@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -51,6 +52,18 @@ public class SecurityConfig {
                                 "/swagger-ui.html", "/swagger-ui/**",
                                 "/v3/api-docs", "/v3/api-docs/**",
                                 "/swagger-resources/**", "/webjars/**").permitAll()
+                        // --- Role rules (RBAC), aligned with the platform role model ---
+                        // Status change is internal / logistics only.
+                        .requestMatchers(HttpMethod.PATCH, "/orders/*/status")
+                                .hasAnyRole("logistics", "admin", "service_account")
+                        // Listing all orders is a back-office read (ownership still scopes
+                        // non-privileged callers to their own orders in the controller).
+                        .requestMatchers(HttpMethod.GET, "/orders")
+                                .hasAnyRole("admin", "analyst", "logistics", "service_account")
+                        // Creating and reading a single order: any authenticated caller;
+                        // resource ownership is enforced in the controller (OrderOwnership).
+                        .requestMatchers(HttpMethod.POST, "/orders").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/orders/*").authenticated()
                         // Everything else needs a valid JWT
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2

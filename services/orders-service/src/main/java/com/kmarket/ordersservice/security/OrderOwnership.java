@@ -8,20 +8,25 @@ import org.springframework.stereotype.Component;
 import java.util.Set;
 
 /**
- * Enforces that a caller may only create an order <em>for themselves</em>.
+ * Resource-level (ownership) authorization for orders, complementing the coarse
+ * role rules in {@code SecurityConfig}.
  *
  * <p>auth-service mints JWTs whose {@code sub} claim is the user id and whose
  * {@code roles} claim lists the caller's roles (see {@code JwtService}). A regular
- * customer's {@code sub} must therefore match the {@code customer_id} in the request
- * body. Back-office / Saga callers that legitimately act on behalf of any customer
- * (roles {@code service_account}, {@code admin}) bypass the check.</p>
+ * customer's {@code sub} must therefore match the {@code customer_id} of the order they
+ * create, read or list. Back-office / Saga callers that legitimately act on behalf of
+ * any customer bypass ownership checks (see {@link #PRIVILEGED_AUTHORITIES}).</p>
  */
 @Component
 public class OrderOwnership {
 
-    /** Roles allowed to place an order for any customer (Saga, seeding, admin tooling). */
+    /** Roles allowed to act on <em>any</em> customer's orders (Saga, analytics, logistics, admin). */
     private static final Set<String> PRIVILEGED_AUTHORITIES =
-            Set.of("ROLE_service_account", "ROLE_admin");
+            Set.of("ROLE_admin", "ROLE_analyst", "ROLE_logistics", "ROLE_service_account");
+
+    /** Roles allowed to create an order <em>for another</em> customer (Saga / admin tooling only). */
+    private static final Set<String> CREATE_FOR_OTHERS_AUTHORITIES =
+            Set.of("ROLE_admin", "ROLE_service_account");
 
     /**
      * Verifies that {@code authentication} is allowed to create an order for
@@ -38,7 +43,7 @@ public class OrderOwnership {
             // Field-level @NotNull validation already covers this; guard defensively.
             throw ApiException.badRequest("customer_id is required");
         }
-        if (isPrivileged(authentication)) {
+        if (hasAnyAuthority(authentication, CREATE_FOR_OTHERS_AUTHORITIES)) {
             return;
         }
 
@@ -49,12 +54,59 @@ public class OrderOwnership {
         }
     }
 
+    /**
+     * Verifies that {@code authentication} may read an order belonging to
+     * {@code ownerCustomerId}. Privileged roles may read any order; a regular customer
+     * may only read their own.
+     *
+     * @throws ApiException {@code 403} if a non-privileged caller reads another customer's order
+     */
+    public void assertCanRead(Authentication authentication, Integer ownerCustomerId) {
+        if (isPrivileged(authentication)) {
+            return;
+        }
+        Integer subjectId = parseSubjectId(authentication);
+        if (subjectId == null || !subjectId.equals(ownerCustomerId)) {
+            throw ApiException.forbidden("You can only access your own orders");
+        }
+    }
+
+    /**
+     * Computes the {@code customer_id} filter to apply when listing orders.
+     *
+     * <ul>
+     *   <li>Privileged roles: the requested {@code customerId} is honoured as-is
+     *       ({@code null} means "all customers").</li>
+     *   <li>Regular customers: the filter is forced to their own id, so they can only
+     *       ever list their own orders; requesting another customer's id is a {@code 403}.</li>
+     * </ul>
+     *
+     * @return the {@code customer_id} the service must filter on
+     */
+    public Integer effectiveCustomerFilter(Authentication authentication, Integer requestedCustomerId) {
+        if (isPrivileged(authentication)) {
+            return requestedCustomerId;
+        }
+        Integer subjectId = parseSubjectId(authentication);
+        if (subjectId == null) {
+            throw ApiException.forbidden("You can only list your own orders");
+        }
+        if (requestedCustomerId != null && !requestedCustomerId.equals(subjectId)) {
+            throw ApiException.forbidden("You can only list your own orders");
+        }
+        return subjectId;
+    }
+
     private boolean isPrivileged(Authentication authentication) {
+        return hasAnyAuthority(authentication, PRIVILEGED_AUTHORITIES);
+    }
+
+    private boolean hasAnyAuthority(Authentication authentication, Set<String> wanted) {
         if (authentication == null) {
             return false;
         }
         for (GrantedAuthority authority : authentication.getAuthorities()) {
-            if (PRIVILEGED_AUTHORITIES.contains(authority.getAuthority())) {
+            if (wanted.contains(authority.getAuthority())) {
                 return true;
             }
         }

@@ -113,6 +113,29 @@ class OrderControllerTest {
         verifyNoInteractions(orderService);
     }
 
+    @Test
+    @WithMockUser(username = "42", roles = "catalog_manager")
+    void listOrders_withoutBackOfficeRole_returnsForbidden() throws Exception {
+        // catalog_manager is not allowed to list orders (role rule).
+        mockMvc.perform(get("/orders"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "service_account")
+    void listOrders_privileged_withoutFilter_listsAllCustomers() throws Exception {
+        when(orderService.listOrders(isNull(), isNull(), eq(50), eq(0)))
+                .thenReturn(new OrderListResponse(List.of(), 0));
+
+        mockMvc.perform(get("/orders"))
+                .andExpect(status().isOk());
+
+        // Privileged caller: no customer filter forced.
+        verify(orderService).listOrders(null, null, 50, 0);
+    }
+
     // ---------------------------------------------------------------------
     // POST /orders
     // ---------------------------------------------------------------------
@@ -309,6 +332,40 @@ class OrderControllerTest {
                 .andExpect(jsonPath("$.code").value("NOT_FOUND"));
     }
 
+    @Test
+    @WithMockUser(username = "42", roles = "catalog_manager")
+    void getOrder_ownOrder_isAllowed() throws Exception {
+        // Non-privileged caller reading their OWN order (customer_id 42 == sub 42).
+        OrderDetailResponse detail = new OrderDetailResponse(
+                7, 42, "paid", 1980,
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                new OrderDetailResponse.Customer(42, "Alice", "alice@market.test"),
+                List.of());
+        when(orderService.getOrder(7)).thenReturn(detail);
+
+        mockMvc.perform(get("/orders/7"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.customer_id").value(42));
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "catalog_manager")
+    void getOrder_otherCustomersOrder_returnsForbidden() throws Exception {
+        // Non-privileged caller (sub 42) reading an order owned by customer 99 -> 403.
+        OrderDetailResponse detail = new OrderDetailResponse(
+                7, 99, "paid", 1980,
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                new OrderDetailResponse.Customer(99, "Bob", "bob@market.test"),
+                List.of());
+        when(orderService.getOrder(7)).thenReturn(detail);
+
+        mockMvc.perform(get("/orders/7"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
     // ---------------------------------------------------------------------
     // PATCH /orders/{order_id}/status
     // ---------------------------------------------------------------------
@@ -372,4 +429,34 @@ class OrderControllerTest {
         verifyNoInteractions(orderService);
     }
 
+    @Test
+    @WithMockUser(username = "42", roles = "analyst")
+    void updateStatus_withoutLogisticsRole_returnsForbidden() throws Exception {
+        // analyst is read-only back-office; it cannot change an order's status (role rule).
+        mockMvc.perform(patch("/orders/7/status")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"preparing\"}"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "logistics")
+    void updateStatus_withLogisticsRole_isAllowed() throws Exception {
+        OrderResponse updated = new OrderResponse(7, 42, "preparing", 1980,
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                OffsetDateTime.parse("2024-01-01T11:00:00Z"));
+        when(orderService.updateStatus(eq(7), eq("preparing"))).thenReturn(updated);
+
+        mockMvc.perform(patch("/orders/7/status")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"preparing\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("preparing"));
+
+        verify(orderService).updateStatus(7, "preparing");
+    }
 }

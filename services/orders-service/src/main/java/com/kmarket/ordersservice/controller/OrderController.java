@@ -43,9 +43,14 @@ public class OrderController {
     /**
      * {@code GET /orders} — lists recent orders, optionally filtered by
      * {@code status} and/or {@code customer_id}, with offset/limit pagination.
+     *
+     * <p>Role rule: {@code admin}/{@code analyst}/{@code logistics}/{@code service_account}
+     * (see SecurityConfig). Ownership: non-privileged callers are scoped to their own
+     * orders; the requested {@code customer_id} cannot point at another customer.</p>
      */
     @GetMapping
     public OrderListResponse listOrders(
+            Authentication authentication,
             @RequestParam(required = false) String status,
             @RequestParam(name = "customer_id", required = false) Integer customerId,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
@@ -59,7 +64,8 @@ public class OrderController {
         }
         int effectiveLimit = Math.min(limit, MAX_LIMIT);
 
-        return orderService.listOrders(status, customerId, effectiveLimit, offset);
+        Integer effectiveCustomerId = orderOwnership.effectiveCustomerFilter(authentication, customerId);
+        return orderService.listOrders(status, effectiveCustomerId, effectiveLimit, offset);
     }
 
     /**
@@ -98,10 +104,18 @@ public class OrderController {
     /**
      * {@code GET /orders/{order_id}} — reads a single order with its customer and its
      * priced lines ({@code OrderDetail}). Returns {@code 404} if the order is unknown.
+     *
+     * <p>Ownership: a non-privileged caller may only read their own order ({@code 403}
+     * otherwise); {@code admin}/{@code analyst}/{@code logistics}/{@code service_account}
+     * may read any order.</p>
      */
     @GetMapping("/{order_id}")
-    public OrderDetailResponse getOrder(@PathVariable("order_id") int orderId) {
-        return orderService.getOrder(orderId);
+    public OrderDetailResponse getOrder(
+            Authentication authentication,
+            @PathVariable("order_id") int orderId) {
+        OrderDetailResponse order = orderService.getOrder(orderId);
+        orderOwnership.assertCanRead(authentication, order.customerId());
+        return order;
     }
 
     /**
@@ -118,4 +132,3 @@ public class OrderController {
         return orderService.updateStatus(orderId, request.status());
     }
 }
-
