@@ -407,6 +407,9 @@ services:
       SPARK_NO_DAEMONIZE: "true"
       SPARK_MASTER_HOST: spark-master
       ANALYTICS_DSN: postgresql://analytics_svc:${ANALYTICS_DB_PASSWORD:?voir .env}@postgres:5432/kmarket
+      STOCK_URL: http://stock-service:8002/v1
+      AUTH_URL: http://auth-service:8005/v1
+      STREAM_CONSUMER_API_KEY: ${STREAM_CONSUMER_API_KEY:?voir .env}
     depends_on:
       - postgres
     ports:

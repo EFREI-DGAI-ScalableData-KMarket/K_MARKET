@@ -8,6 +8,10 @@ from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 import os
 import psycopg
+import logging
+import time
+
+import httpx
 
 BOOTSTRAP = "kafka:19092"  # listener INTERNAL
 
@@ -41,6 +45,15 @@ STOCK_EVENT = StructType([
 
 CHECKPOINTS = "/opt/spark-checkpoints"     # volume partagé entre spark-master et spark-worker
 DSN = os.environ["ANALYTICS_DSN"]
+
+log = logging.getLogger("realtime")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+STOCK_URL = os.environ["STOCK_URL"]
+AUTH_URL = os.environ["AUTH_URL"]
+API_KEY = os.environ["STREAM_CONSUMER_API_KEY"]
+HORIZON_MINUTES = 5      # rythme de vente calculé sur les 5 dernières minutes
+ALERT_MINUTES = 30       # alerte si le stock tient moins de 30 minutes à ce rythme
 
 KPI_UPSERT = """
 INSERT INTO analytics.kpi_minute (window_start, window_end, orders_placed, orders_paid, revenue_cents, payments_failed, updated_at)
@@ -91,19 +104,81 @@ def demand_per_minute(stock):
             .groupBy(window("occurred_at", WINDOW), "product_id")
             .agg((-sum_("delta")).alias("net_units")))
 
+_token = {"value": None, "expires": 0.0}
 
 
-def to_postgres(df, name: str, sql: str, columns: list[str]):
+def service_token() -> str:
+    """Jeton service_account obtenu avec la clé d'API du compte technique ; renouvelé une minute avant expiration."""
+    if _token["value"] and time.time() < _token["expires"] - 60:
+        return _token["value"]
+    r = httpx.post(f"{AUTH_URL}/auth/token", headers={"X-API-Key": API_KEY}, timeout=5)
+    r.raise_for_status()
+    body = r.json()
+    _token.update(value=body["access_token"], expires=time.time() + body.get("expires_in", 900))
+    return _token["value"]
+
+
+SELLING = """
+SELECT product_id, SUM(net_units) AS sold
+FROM analytics.demand_minute
+WHERE window_start >= now() - make_interval(mins => %s)
+GROUP BY product_id
+HAVING SUM(net_units) > 0
+"""
+
+ALERT_UPSERT = """
+INSERT INTO analytics.stock_alerts (product_id, remaining_units, units_per_minute, minutes_left, active, raised_at, updated_at)
+VALUES (%s, %s, %s, %s, %s, now(), now())
+ON CONFLICT (product_id) DO UPDATE SET
+  remaining_units = EXCLUDED.remaining_units, units_per_minute = EXCLUDED.units_per_minute,
+  minutes_left = EXCLUDED.minutes_left, active = EXCLUDED.active, updated_at = now(),
+  raised_at = CASE WHEN stock_alerts.active OR NOT EXCLUDED.active THEN stock_alerts.raised_at ELSE now() END
+"""
+
+
+def evaluate_stock_alerts(conn):
+    """Rupture proche : rythme de vente (5 dernières minutes) comparé au stock restant lu par l'API Stock."""
+    selling = conn.execute(SELLING, (HORIZON_MINUTES,)).fetchall()
+    if selling:
+        ids = ",".join(str(pid) for pid, _ in selling[:200])                  # l'API accepte 200 ids maximum
+        r = httpx.get(f"{STOCK_URL}/stock", params={"product_ids": ids},
+                      headers={"Authorization": f"Bearer {service_token()}"}, timeout=5)
+        r.raise_for_status()
+        remaining = {s["product_id"]: s["total_quantity"] for s in r.json()}
+        rows = []
+        for pid, sold in selling:
+            if pid not in remaining:
+                continue
+            per_minute = sold / HORIZON_MINUTES
+            minutes_left = remaining[pid] / per_minute
+            rows.append((pid, remaining[pid], round(per_minute, 2), round(minutes_left, 1), minutes_left < ALERT_MINUTES))
+        conn.cursor().executemany(ALERT_UPSERT, rows)
+    # Les produits qui ne se vendent plus ne sont plus en danger : l'alerte s'éteint.
+    selling_ids = [pid for pid, _ in selling] or [-1]
+    conn.execute("UPDATE analytics.stock_alerts SET active = false, updated_at = now() "
+                 "WHERE active AND NOT (product_id = ANY(%s))", (selling_ids,))
+
+
+def to_postgres(df, name: str, sql: str, columns: list[str], after=None):
     """Chaque lot : les fenêtres modifiées (mode update) sont réécrites dans PostgreSQL.
-    Écrire en écrasant rend le lot rejouable : après une panne, Spark le rejoue et la base reste juste."""
+    Écrire en écrasant rend le lot rejouable : après une panne, Spark le rejoue et la base reste juste.
+    `after(conn)` : traitement facultatif après l'écriture (ici, l'évaluation des alertes)."""
     flat = df.select(col("window.start").alias("window_start"), col("window.end").alias("window_end"), "*").drop("window")
 
     def write(batch, batch_id):
-        rows = [tuple(r[c] for c in columns) for r in batch.collect()]   # quelques dizaines de lignes par lot
+        rows = [tuple(r[c] for c in columns) for r in batch.collect()]
         if not rows:
             return
-        with psycopg.connect(DSN, options="-c TimeZone=UTC") as conn:   # heures Spark en UTC → timestamptz en UTC
-            conn.cursor().executemany(sql, rows)                         # une transaction par lot, validée à la sortie du with
+        with psycopg.connect(DSN, options="-c TimeZone=UTC") as conn:
+            conn.cursor().executemany(sql, rows)
+        if after:
+            try:
+                with psycopg.connect(DSN, options="-c TimeZone=UTC") as conn:
+                    after(conn)
+            except Exception:
+                # API Stock ou auth indisponible : on le note et on continue. Les KPI ne s'arrêtent pas,
+                # et le lot suivant recalcule les alertes depuis la table.
+                log.exception("évaluation des alertes impossible (lot %s)", batch_id)
 
     return (flat.writeStream.outputMode("update").foreachBatch(write)
                 .option("checkpointLocation", f"{CHECKPOINTS}/{name}")
@@ -120,5 +195,5 @@ stock = read("inventory.stock-changed", STOCK_EVENT)
 to_postgres(orders_per_minute(orders), "kpi_orders", KPI_UPSERT,
             ["window_start", "window_end", "orders_placed", "orders_paid", "revenue_cents", "payments_failed"])
 to_postgres(demand_per_minute(stock), "demand", DEMAND_UPSERT,
-            ["window_start", "window_end", "product_id", "net_units"])
+            ["window_start", "window_end", "product_id", "net_units"], after=evaluate_stock_alerts)
 spark.streams.awaitAnyTermination()

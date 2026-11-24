@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS analytics.demand_minute (
     PRIMARY KEY (window_start, product_id)
 );
 
+CREATE TABLE IF NOT EXISTS analytics.stock_alerts (
+    product_id       INTEGER       PRIMARY KEY,
+    remaining_units  INTEGER       NOT NULL,
+    units_per_minute NUMERIC(10,2) NOT NULL,
+    minutes_left     NUMERIC(10,1) NOT NULL,
+    active           BOOLEAN       NOT NULL,
+    raised_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),   -- début de l'alerte en cours
+    updated_at       TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_stock_alerts_active ON analytics.stock_alerts (minutes_left) WHERE active;
 -- Moindre privilège : analytics_svc ne voit que son schéma, sans pouvoir supprimer ni créer de table.
 GRANT USAGE ON SCHEMA analytics TO analytics_svc;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA analytics TO analytics_svc;
