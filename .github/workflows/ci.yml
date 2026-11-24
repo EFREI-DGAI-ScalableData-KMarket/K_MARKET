@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Générer le .env (depuis .env.example : secrets aléatoires, autres valeurs reprises)
+      - name: "Générer le .env (depuis .env.example : secrets aléatoires, autres valeurs reprises)"
         run: |
           while IFS= read -r line; do
             case "$line" in ''|\#*) continue ;; esac          # lignes vides et commentaires
@@ -58,7 +58,7 @@ jobs:
           done
 
       - name: Installer les dépendances des tests
-         run: pip install -r services/stock-service/tests/requirements.txt -r services/catalog-service/tests/requirements.txt -r services/dashboard-service/tests/requirements.txt
+        run: pip install -r services/stock-service/tests/requirements.txt -r services/catalog-service/tests/requirements.txt -r services/dashboard-service/tests/requirements.txt
 
       - name: Tests du service Stock
         run: make test-stock
