@@ -14,10 +14,11 @@ import java.util.Set;
  *
  * <p>The transition map encodes the Saga / logistics flow:
  * {@code pending → stock_reserved → paid → preparing → shipped → delivered}, with
- * {@code payment_failed} reachable from the early stages and {@code cancelled} reachable
- * up to {@code paid}. Terminal states ({@code delivered}, {@code payment_failed},
- * {@code cancelled}) allow no further transition, so e.g. {@code delivered → pending}
- * is rejected as a {@code 409} by {@link #canTransitionTo(OrderStatus)}.</p>
+ * {@code rejected} reached from {@code pending} when stock cannot be reserved (no payment
+ * attempted), {@code payment_failed} reachable from the early stages and {@code cancelled}
+ * reachable up to {@code paid}. Terminal states ({@code delivered}, {@code payment_failed},
+ * {@code cancelled}, {@code rejected}) allow no further transition, so e.g.
+ * {@code delivered → pending} is rejected as a {@code 409} by {@link #canTransitionTo(OrderStatus)}.</p>
  */
 public enum OrderStatus {
 
@@ -28,7 +29,8 @@ public enum OrderStatus {
     SHIPPED("shipped"),
     DELIVERED("delivered"),
     PAYMENT_FAILED("payment_failed"),
-    CANCELLED("cancelled");
+    CANCELLED("cancelled"),
+    REJECTED("rejected");
 
     private final String value;
 
@@ -64,7 +66,7 @@ public enum OrderStatus {
      * terminal ones) map to an empty set and thus accept no transition.
      */
     private static final Map<OrderStatus, Set<OrderStatus>> ALLOWED = Map.of(
-            PENDING, Set.of(STOCK_RESERVED, PAYMENT_FAILED, CANCELLED),
+            PENDING, Set.of(STOCK_RESERVED, PAYMENT_FAILED, CANCELLED, REJECTED),
             STOCK_RESERVED, Set.of(PAID, PAYMENT_FAILED, CANCELLED),
             PAID, Set.of(PREPARING, CANCELLED),
             PREPARING, Set.of(SHIPPED),

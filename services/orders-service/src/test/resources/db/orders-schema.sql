@@ -25,7 +25,8 @@ CREATE TABLE orders.orders (
                      'shipped',
                      'delivered',
                      'payment_failed',
-                     'cancelled'
+                     'cancelled',
+                     'rejected'
                  )),
     total_cents  INTEGER     NOT NULL CHECK (total_cents >= 0),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -127,12 +127,21 @@ services:
       ORDERS_OUTBOX_RELAY_ENABLED: "false"
       # Catalogue (GraphQL) : valide les produits et récupère les prix (POST /orders).
       CATALOG_BASE_URL: http://catalog-service:8004/v1
+      # Stock (REST) : réservation du stock (Saga). orders-api s'authentifie en
+      # service_account via auth-api (POST /auth/token avec ORDERS_API_KEY).
+      STOCK_BASE_URL: http://stock-service:8002/v1
+      AUTH_BASE_URL: http://auth-service:8005/v1
+      ORDERS_API_KEY: ${ORDERS_API_KEY:?voir .env}
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
       postgres:
         condition: service_healthy
       catalog-service:
+        condition: service_started
+      stock-service:
+        condition: service_started
+      auth-service:
         condition: service_started
 
   # Service Auth (REST, Spring Boot)

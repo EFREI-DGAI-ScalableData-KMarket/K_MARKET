@@ -7,6 +7,7 @@ import com.kmarket.ordersservice.entity.Customer;
 import com.kmarket.ordersservice.entity.OrderItem;
 import com.kmarket.ordersservice.event.OrderEvent;
 import com.kmarket.ordersservice.exception.ApiException;
+import com.kmarket.ordersservice.client.StockReservationOutcome;
 import com.kmarket.ordersservice.repository.CustomerRepository;
 import com.kmarket.ordersservice.repository.IdempotencyKeyRepository;
 import com.kmarket.ordersservice.repository.OrderItemRepository;
@@ -32,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * (Testcontainers) PostgreSQL seeded with the {@code orders} schema.
  */
 @SpringBootTest
-@Import({TestcontainersConfiguration.class, TestCatalogConfiguration.class})
+@Import({TestcontainersConfiguration.class, TestCatalogConfiguration.class, TestStockConfiguration.class})
 @TestPropertySource(properties = "orders.outbox.relay.enabled=false")
 class OrderCreateIntegrationTest {
 
@@ -48,6 +49,8 @@ class OrderCreateIntegrationTest {
     private CustomerRepository customerRepository;
     @Autowired
     private OutboxEventRepository outboxEventRepository;
+    @Autowired
+    private TestStockConfiguration.ControllableStockClient stockClient;
 
     private Integer customerId;
 
@@ -58,6 +61,7 @@ class OrderCreateIntegrationTest {
         orderItemRepository.deleteAll();
         orderRepository.deleteAll();
         customerRepository.deleteAll();
+        stockClient.outcome.set(StockReservationOutcome.RESERVED);
 
         Customer customer = new Customer();
         customer.setName("Alice");
@@ -74,10 +78,11 @@ class OrderCreateIntegrationTest {
 
         OrderResponse created = orderService.createOrder(key, request);
 
-        // Order head persisted with a computed total and the happy-path status.
+        // Order head persisted with a computed total; after a successful reservation the
+        // Saga has moved it pending -> stock_reserved.
         assertThat(created.id()).isNotNull();
         assertThat(created.customerId()).isEqualTo(customerId);
-        assertThat(created.status()).isEqualTo("paid");
+        assertThat(created.status()).isEqualTo("stock_reserved");
         assertThat(created.totalCents()).isPositive();
         assertThat(created.createdAt()).isNotNull();
 
@@ -86,13 +91,16 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isEqualTo(2);
         assertThat(idempotencyKeyRepository.findById(key)).isPresent();
 
-        // Exactly one order_placed event was staged in the outbox, in the same transaction.
-        assertThat(outboxEventRepository.count()).isEqualTo(1);
-        var event = outboxEventRepository.findAll().get(0);
-        assertThat(event.getTopic()).isEqualTo("orders.events");
-        assertThat(event.getEventKey()).isEqualTo(String.valueOf(created.id()));
-        assertThat(event.getPublishedAt()).isNull();
-        assertThat(event.getPayload())
+        // Two events staged: order_placed (Tx1) + order_status_changed to stock_reserved (Tx2).
+        assertThat(outboxEventRepository.count()).isEqualTo(2);
+        var placed = outboxEventRepository.findAll().stream()
+                .filter(e -> e.getPayload().contains(OrderEvent.ORDER_PLACED))
+                .findFirst()
+                .orElseThrow();
+        assertThat(placed.getTopic()).isEqualTo("orders.events");
+        assertThat(placed.getEventKey()).isEqualTo(String.valueOf(created.id()));
+        assertThat(placed.getPublishedAt()).isNull();
+        assertThat(placed.getPayload())
                 .contains("\"event_type\"")
                 .contains(OrderEvent.ORDER_PLACED)
                 .contains("\"order_id\"")
@@ -133,8 +141,8 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isEqualTo(1);
         assertThat(idempotencyKeyRepository.count()).isEqualTo(1);
 
-        // The idempotent replay must NOT stage a second event.
-        assertThat(outboxEventRepository.count()).isEqualTo(1);
+        // First create staged two events (placed + stock_reserved); the replay stages none.
+        assertThat(outboxEventRepository.count()).isEqualTo(2);
     }
 
     @Test
@@ -155,7 +163,7 @@ class OrderCreateIntegrationTest {
         // The original order is untouched and no second order/event was created.
         assertThat(orderRepository.count()).isEqualTo(1);
         assertThat(orderRepository.findById(first.id())).isPresent();
-        assertThat(outboxEventRepository.count()).isEqualTo(1);
+        assertThat(outboxEventRepository.count()).isEqualTo(2);
     }
 
     @Test
@@ -174,7 +182,7 @@ class OrderCreateIntegrationTest {
 
         assertThat(replay.id()).isEqualTo(first.id());
         assertThat(orderRepository.count()).isEqualTo(1);
-        assertThat(outboxEventRepository.count()).isEqualTo(1);
+        assertThat(outboxEventRepository.count()).isEqualTo(2);
     }
 
     @Test
@@ -191,5 +199,48 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isZero();
         assertThat(idempotencyKeyRepository.count()).isZero();
         assertThat(outboxEventRepository.count()).isZero();
+    }
+
+    @Test
+    void createOrder_insufficientStock_rejectsOrderWithoutPayment() {
+        stockClient.outcome.set(StockReservationOutcome.INSUFFICIENT);
+        String key = UUID.randomUUID().toString();
+        var request = new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 3)));
+
+        // Reservation fails -> 422, no payment attempted.
+        assertThatThrownBy(() -> orderService.createOrder(key, request))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
+
+        // The order IS persisted (id generated by PostgreSQL) but transitioned to 'rejected'.
+        assertThat(orderRepository.count()).isEqualTo(1);
+        var order = orderRepository.findAll().get(0);
+        assertThat(order.getStatus()).isEqualTo("rejected");
+        // Never reached 'paid'/'stock_reserved'.
+        assertThat(order.getStatus()).isNotEqualTo("stock_reserved");
+        // order_placed + order_status_changed(->rejected) events staged.
+        assertThat(outboxEventRepository.count()).isEqualTo(2);
+    }
+
+    @Test
+    void createOrder_uncertainReservation_leavesOrderPending() {
+        stockClient.outcome.set(StockReservationOutcome.UNCERTAIN);
+        String key = UUID.randomUUID().toString();
+        var request = new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 1)));
+
+        // Uncertain outcome (e.g. timeout) -> 502, NOT treated as insufficient.
+        assertThatThrownBy(() -> orderService.createOrder(key, request))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY));
+
+        // The order stays 'pending' for reconciliation (not rejected, not reserved).
+        assertThat(orderRepository.count()).isEqualTo(1);
+        assertThat(orderRepository.findAll().get(0).getStatus()).isEqualTo("pending");
+        // Only the order_placed event (no status transition happened).
+        assertThat(outboxEventRepository.count()).isEqualTo(1);
     }
 }

@@ -20,7 +20,8 @@ CREATE TABLE orders.orders (
                      'shipped',
                      'delivered',
                      'payment_failed',   --  réservation libérée
-                     'cancelled'         -- annulée par le client ou un admin
+                     'cancelled',        -- annulée par le client ou un admin
+                     'rejected'          -- stock insuffisant à la réservation (aucun paiement tenté)
                  )),
     total_cents  INTEGER     NOT NULL CHECK (total_cents >= 0),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

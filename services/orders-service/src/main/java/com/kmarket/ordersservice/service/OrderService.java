@@ -2,6 +2,8 @@ package com.kmarket.ordersservice.service;
 
 import com.kmarket.ordersservice.catalog.CatalogProduct;
 import com.kmarket.ordersservice.catalog.ProductCatalog;
+import com.kmarket.ordersservice.client.StockClient;
+import com.kmarket.ordersservice.client.StockReservationOutcome;
 import com.kmarket.ordersservice.domain.OrderStatus;
 import com.kmarket.ordersservice.dto.OrderCreateRequest;
 import com.kmarket.ordersservice.dto.OrderDetailResponse;
@@ -20,6 +22,7 @@ import com.kmarket.ordersservice.repository.OrderItemRepository;
 import com.kmarket.ordersservice.repository.OrderRepository;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -44,19 +47,23 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class OrderService {
 
-    /**
-     * Status of a freshly created order on the happy path. The full Saga would move
-     * through {@code stock_reserved} then {@code paid}; with the external stock/payment
-     * calls not yet wired, a successfully persisted order is recorded as {@code paid}.
-     */
-    private static final String CREATED_STATUS = "paid";
-
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final CustomerRepository customerRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ProductCatalog productCatalog;
+    private final StockClient stockClient;
     private final OrderEventPublisher orderEventPublisher;
+
+    /**
+     * Self-reference used to invoke the {@code @Transactional} persistence/transition steps
+     * through the Spring proxy (a plain {@code this.method()} call would bypass the
+     * transaction advice). Each step is its own short transaction, with the external Stock
+     * call made in between — never inside a database transaction.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    @Lazy
+    private OrderService self;
 
     /**
      * Lists recent orders (most recent first), optionally filtered by {@code status}
@@ -168,24 +175,72 @@ public class OrderService {
     }
 
     /**
-     * Creates an order, its lines and the idempotency record <em>atomically</em>.
+     * Creates an order and runs the first Saga step: reserve the stock.
      *
-     * <p>The whole method runs in a single transaction: either the order, all of its
-     * {@code order_items} and the {@code idempotency_keys} row are committed together,
-     * or nothing is (rollback on any exception). Products are validated and priced via
-     * {@link com.kmarket.ordersservice.catalog.ProductCatalog} (the Catalog seam) and the
-     * per-line price is frozen into {@code order_items.unit_price_cents}.</p>
+     * <p>Orchestration (external calls are kept <em>outside</em> any database transaction):</p>
+     * <ol>
+     *   <li><b>Tx1</b> — {@link #persistPendingOrder}: validate idempotency/customer, price the
+     *       lines via the Catalog, and persist the order as {@code pending} with its lines,
+     *       idempotency key and {@code order_placed} event, all atomically.</li>
+     *   <li><b>Stock reserve</b> (no transaction): {@code POST /stock/reserve}, idempotent by
+     *       {@code order_id}.</li>
+     *   <li><b>Tx2</b> — depending on the outcome:
+     *     <ul>
+     *       <li>{@code RESERVED} → transition {@code pending → stock_reserved}.</li>
+     *       <li>{@code INSUFFICIENT} → transition {@code pending → rejected} (no payment is
+     *           attempted) and surface {@code 422} to the caller; the rejected order stays
+     *           persisted and visible.</li>
+     *       <li>{@code UNCERTAIN} (timeout / transport) → leave the order {@code pending} and
+     *           surface {@code 502}; a reconciliation job must resolve it later. This is
+     *           deliberately NOT treated as insufficient stock.</li>
+     *     </ul>
+     *   </li>
+     * </ol>
      *
-     * <p>Idempotency: if {@code idempotencyKey} was already used with the <em>same</em>
-     * request, the previously created order is returned unchanged (safe retry); reusing
-     * the key with a <em>different</em> request payload is rejected with {@code 409}.</p>
+     * <p>Idempotency: replaying the same key with the same request returns the existing order
+     * (the stock reserve is itself idempotent by {@code order_id}); a different payload is a
+     * {@code 409}.</p>
      *
      * @param idempotencyKey the client-supplied {@code Idempotency-Key} header
      * @param request        the validated order payload
-     * @return the created (or previously created) order
+     * @return the created order after the reservation attempt
+     */
+    public OrderResponse createOrder(String idempotencyKey, OrderCreateRequest request) {
+        // Tx1: persist the order as pending (or return the existing one on idempotent replay).
+        PersistResult persisted = self.persistPendingOrder(idempotencyKey, request);
+        if (persisted.replay()) {
+            return persisted.response();
+        }
+
+        int orderId = persisted.response().id();
+
+        // Stock reservation — external call, deliberately outside any DB transaction.
+        StockReservationOutcome outcome = stockClient.reserve(orderId, persisted.lines());
+
+        // Tx2: record the outcome.
+        switch (outcome) {
+            case RESERVED -> {
+                return self.transition(orderId, OrderStatus.STOCK_RESERVED);
+            }
+            case INSUFFICIENT -> {
+                self.transition(orderId, OrderStatus.REJECTED);
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "INSUFFICIENT_STOCK",
+                        "Insufficient stock: order " + orderId + " was rejected (no payment attempted)");
+            }
+            default -> throw ApiException.upstream(
+                    "Stock reservation outcome is uncertain for order " + orderId
+                            + "; the order stays pending for reconciliation");
+        }
+    }
+
+    /**
+     * Tx1 of {@link #createOrder}: validates and persists the order as {@code pending} with
+     * its lines, idempotency key and {@code order_placed} event — all atomically. Makes no
+     * external calls other than the Catalog lookup (read-only, idempotent).
      */
     @Transactional
-    public OrderResponse createOrder(String idempotencyKey, OrderCreateRequest request) {
+    public PersistResult persistPendingOrder(String idempotencyKey, OrderCreateRequest request) {
         String requestHash = requestHash(request);
 
         // 1. Idempotency replay. Same key must mean the same request:
@@ -198,10 +253,11 @@ public class OrderService {
                 throw ApiException.conflict(
                         "Idempotency-Key already used with a different request payload");
             }
-            return orderRepository.findById(key.getOrderId())
+            OrderResponse replay = orderRepository.findById(key.getOrderId())
                     .map(OrderResponse::from)
                     .orElseThrow(() -> ApiException.conflict(
                             "Idempotency key already used but its order is missing"));
+            return PersistResult.replay(replay);
         }
 
         // 2. Validate the customer exists (FK orders.orders.customer_id -> orders.customers.id).
@@ -239,10 +295,10 @@ public class OrderService {
             throw ApiException.badRequest("Order total exceeds the supported maximum");
         }
 
-        // 4. Persist the order head; flush to obtain the DB-generated id + created_at.
+        // 4. Persist the order head as PENDING; flush to obtain the DB-generated id + created_at.
         Order order = new Order();
         order.setCustomerId(request.customerId());
-        order.setStatus(CREATED_STATUS);
+        order.setStatus(OrderStatus.PENDING.value());
         order.setTotalCents((int) totalCents);
         orderRepository.saveAndFlush(order);
 
@@ -263,11 +319,46 @@ public class OrderService {
         }
 
         // 7. Stage the creation event in the same transaction (transactional outbox).
-        //    Reached only on genuine first creation; the idempotent replay returns earlier.
         orderEventPublisher.publish(OrderEvent.placed(
                 order.getId(), order.getCustomerId(), order.getStatus(), order.getTotalCents()));
 
+        return PersistResult.created(OrderResponse.from(order), lines);
+    }
+
+    /**
+     * Tx2 of {@link #createOrder}: transitions a just-persisted order to {@code target}
+     * (e.g. {@code stock_reserved} or {@code rejected}) and stages the status-change event.
+     * Enforces the same transition rules as {@link #updateStatus}.
+     */
+    @Transactional
+    public OrderResponse transition(int orderId, OrderStatus target) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> ApiException.notFound("Order " + orderId + " not found"));
+        OrderStatus current = OrderStatus.fromValue(order.getStatus());
+        if (!current.canTransitionTo(target)) {
+            throw ApiException.conflict(
+                    "Invalid status transition: " + current.value() + " -> " + target.value());
+        }
+        order.setStatus(target.value());
+        orderRepository.saveAndFlush(order);
+        orderEventPublisher.publish(OrderEvent.statusChanged(
+                order.getId(), order.getCustomerId(), current.value(), target.value(), order.getTotalCents()));
         return OrderResponse.from(order);
+    }
+
+    /**
+     * Outcome of {@link #persistPendingOrder}: the order (as a response), its lines (needed
+     * for the stock-reserve call), and whether this was an idempotent replay (in which case
+     * the Saga must not run again).
+     */
+    public record PersistResult(OrderResponse response, List<OrderItem> lines, boolean replay) {
+        static PersistResult created(OrderResponse response, List<OrderItem> lines) {
+            return new PersistResult(response, lines, false);
+        }
+
+        static PersistResult replay(OrderResponse response) {
+            return new PersistResult(response, List.of(), true);
+        }
     }
 
 
