@@ -161,6 +161,23 @@ services:
       postgres:
         condition: service_healthy
 
+  # Service Paiement (REST, Spring Boot)
+  payment-service:
+    build: ./services/payment-service
+    container_name: payment-service
+    restart: unless-stopped
+    environment:
+      # Compte dédié créé par data/postgres/08_roles.sh (moindre privilège, pas root).
+      PAYMENTS_DB_URL: jdbc:postgresql://postgres:5432/kmarket
+      PAYMENTS_DB_USER: payments_svc
+      PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?voir .env}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+    ports:
+      - "127.0.0.1:8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # API Gateway (Traefik) : configuration dans gateway/
   gateway:
     image: traefik:v3.7
