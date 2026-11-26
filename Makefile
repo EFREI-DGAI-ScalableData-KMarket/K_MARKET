@@ -1,4 +1,4 @@
-.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs orders-logs orders-events psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock migrate migrate-orders-outbox migrate-idempotency-hash migrate-order-items-product-name migrate-order-status-rejected
+.PHONY: help up up-lake up-stream up-spark up-lake-stream up-all down reset reset-all seed reseed logs orders-logs orders-events payment-logs psql mongo explain backup restore-test kafka spark minio mc mc-ls mc-up share-minio traffic kafka-tail fix-net test-catalog test-stock migrate migrate-orders-outbox migrate-idempotency-hash migrate-order-items-product-name migrate-order-status-rejected
 help:            ## Liste les commandes
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
@@ -57,6 +57,9 @@ orders-logs:     ## Affiche les logs du service Commandes (+ relais outbox si la
 
 orders-events:   ## Événements Kafka de Commandes en direct (topic orders.events)
 	$(MAKE) kafka-tail TOPIC=orders.events
+
+payment-logs:    ## Affiche les logs du service Paiement
+	docker compose logs -f payment-service
 
 psql:            ## Ouvre psql en superutilisateur
 	docker compose exec postgres psql -U postgres -d kmarket
