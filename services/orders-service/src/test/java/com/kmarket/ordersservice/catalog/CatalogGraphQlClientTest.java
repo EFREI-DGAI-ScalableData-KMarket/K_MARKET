@@ -1,5 +1,6 @@
 package com.kmarket.ordersservice.catalog;
 
+import com.kmarket.ordersservice.client.ServiceTokenProvider;
 import com.kmarket.ordersservice.exception.ApiException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -12,6 +13,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -20,7 +22,8 @@ import static org.springframework.http.HttpMethod.POST;
 
 /**
  * Unit tests for {@link CatalogGraphQlClient}: the GraphQL {@code productsByIds} response
- * is mapped correctly (active vs inactive, prices, names) and failures surface as 502.
+ * is mapped correctly (active vs inactive, prices, names), the orders {@code service_account}
+ * token is attached (not a forwarded user JWT), and failures surface as 502.
  */
 class CatalogGraphQlClientTest {
 
@@ -29,7 +32,7 @@ class CatalogGraphQlClientTest {
     private CatalogGraphQlClient newClient(MockRestServiceServer[] serverHolder) {
         RestClient.Builder builder = RestClient.builder();
         serverHolder[0] = MockRestServiceServer.bindTo(builder).build();
-        return new CatalogGraphQlClient(builder, BASE_URL);
+        return new CatalogGraphQlClient(builder, BASE_URL, new FixedTokenProvider("svc-token"));
     }
 
     @Test
@@ -39,6 +42,7 @@ class CatalogGraphQlClientTest {
 
         holder[0].expect(requestTo(BASE_URL))
                 .andExpect(method(POST))
+                .andExpect(header("Authorization", "Bearer svc-token"))
                 .andRespond(withSuccess("""
                         {"data":{"productsByIds":[
                           {"product_id":101,"name":"Album A","price_cents":1990,"status":"active"},
@@ -101,5 +105,20 @@ class CatalogGraphQlClientTest {
         // No server expectation set: a call would fail. An empty id set must not hit the network.
         assertThat(client.fetchByIds(List.of())).isEmpty();
         holder[0].verify();
+    }
+
+    /** Minimal {@link ServiceTokenProvider} returning a fixed token (no HTTP). */
+    private static final class FixedTokenProvider extends ServiceTokenProvider {
+        private final String token;
+
+        FixedTokenProvider(String token) {
+            super(RestClient.builder(), "http://unused", "unused");
+            this.token = token;
+        }
+
+        @Override
+        public String getToken() {
+            return token;
+        }
     }
 }

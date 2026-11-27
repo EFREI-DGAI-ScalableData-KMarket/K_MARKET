@@ -1,13 +1,10 @@
 package com.kmarket.ordersservice.catalog;
 
+import com.kmarket.ordersservice.client.ServiceTokenProvider;
 import com.kmarket.ordersservice.exception.ApiException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -20,9 +17,11 @@ import java.util.Map;
  * Real {@link ProductCatalog} backed by the Catalog GraphQL service.
  *
  * <p>Issues the contract's {@code productsByIds(ids: [Int!]!)} query in a single
- * {@code POST /catalog} call, forwarding the caller's Bearer JWT so Catalog applies the
- * same authorization rules. Unknown ids are omitted by Catalog and therefore absent from
- * the returned map; an unreachable or erroring Catalog surfaces as a {@code 502}
+ * {@code POST /catalog} call. The call authenticates with the orders
+ * {@code service_account} identity obtained from {@link ServiceTokenProvider} (decision
+ * D6: a service calls its peers with its own technical token via its API key, never by
+ * forwarding the end user's JWT). Unknown ids are omitted by Catalog and therefore absent
+ * from the returned map; an unreachable or erroring Catalog surfaces as a {@code 502}
  * ({@code UPSTREAM_ERROR}) so the order fails cleanly instead of pricing against stale data.</p>
  */
 public class CatalogGraphQlClient implements ProductCatalog {
@@ -43,9 +42,11 @@ public class CatalogGraphQlClient implements ProductCatalog {
             }""";
 
     private final RestClient restClient;
+    private final ServiceTokenProvider tokenProvider;
 
-    public CatalogGraphQlClient(RestClient.Builder builder, String baseUrl) {
+    public CatalogGraphQlClient(RestClient.Builder builder, String baseUrl, ServiceTokenProvider tokenProvider) {
         this.restClient = builder.baseUrl(baseUrl).build();
+        this.tokenProvider = tokenProvider;
     }
 
     @Override
@@ -66,11 +67,20 @@ public class CatalogGraphQlClient implements ProductCatalog {
                 "query", QUERY,
                 "variables", Map.of("ids", ids));
 
+        String token;
+        try {
+            token = tokenProvider.getToken();
+        } catch (RuntimeException ex) {
+            // Could not obtain a service token (auth-service down / API key rejected).
+            log.warn("Catalog call aborted: no service token", ex);
+            throw ApiException.upstream("Catalog service unreachable");
+        }
+
         Map<String, Object> response;
         try {
             response = restClient.post()
                     .contentType(MediaType.APPLICATION_JSON)
-                    .headers(this::forwardBearerToken)
+                    .headers(headers -> headers.setBearerAuth(token))
                     .body(body)
                     .retrieve()
                     .body(Map.class);
@@ -117,13 +127,5 @@ public class CatalogGraphQlClient implements ProductCatalog {
         String name = product.get("name") instanceof String n ? n : "Product #" + idNum.intValue();
         boolean active = !"inactive".equals(product.get("status"));
         return new CatalogProduct(idNum.intValue(), name, priceNum.intValue(), active);
-    }
-
-    /** Propagates the current request's Bearer JWT to Catalog (same user, same authority). */
-    private void forwardBearerToken(HttpHeaders headers) {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth instanceof JwtAuthenticationToken jwtAuth) {
-            headers.setBearerAuth(jwtAuth.getToken().getTokenValue());
-        }
     }
 }

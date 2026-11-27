@@ -219,8 +219,24 @@ public class OrderService {
 
         int orderId = persisted.response().id();
 
-        // Step 2 — Stock reservation (external call, outside any DB transaction).
-        StockReservationOutcome reservation = stockClient.reserve(orderId, persisted.lines());
+        // Step 2 — Stock reservation (external call, outside any DB transaction), then step 3.
+        return reserveAndContinue(orderId, persisted.lines(), persisted.response().totalCents());
+    }
+
+    /**
+     * Runs the Saga from the stock-reservation step for a {@code pending} order:
+     * {@code POST /stock/reserve} (idempotent by {@code order_id}), then the payment step.
+     * <ul>
+     *   <li>{@code RESERVED} → {@code stock_reserved}, then {@link #runPaymentAndFinalize};</li>
+     *   <li>{@code INSUFFICIENT} → {@code rejected} + {@code 422} (no payment attempted);</li>
+     *   <li>{@code UNCERTAIN} → leave the order {@code pending} + {@code 502} for reconciliation.
+     *       Because reserve is idempotent by {@code order_id}, re-running it later either returns
+     *       the existing reservation (if the earlier attempt had actually applied) or reserves
+     *       now — never a duplicate, and never a new identifier.</li>
+     * </ul>
+     */
+    private OrderResponse reserveAndContinue(int orderId, List<OrderItem> lines, int totalCents) {
+        StockReservationOutcome reservation = stockClient.reserve(orderId, lines);
         switch (reservation) {
             case RESERVED -> self.transition(orderId, OrderStatus.STOCK_RESERVED);
             case INSUFFICIENT -> {
@@ -235,24 +251,34 @@ public class OrderService {
         }
 
         // Step 3 — Payment capture (external call, outside any DB transaction).
-        return runPaymentAndFinalize(orderId, persisted.response().totalCents());
+        return runPaymentAndFinalize(orderId, totalCents);
     }
 
     /**
      * Resumes the Saga for an order that already exists (idempotent replay / post-restart
      * recovery), driven by its durable status rather than any in-memory progress:
      * <ul>
-     *   <li>{@code stock_reserved} → continue with payment capture (which is idempotent by a
-     *       key stable per order, so it never double-charges);</li>
-     *   <li>any other status (terminal or still {@code pending}) → return as-is. A still
-     *       {@code pending} order had an uncertain reservation and is left for reconciliation.</li>
+     *   <li>{@code pending} → the first stock reservation never definitively completed (e.g. an
+     *       UNCERTAIN outcome). Re-run the reservation step; {@code POST /stock/reserve} is
+     *       idempotent by {@code order_id}, so this reconciles the order without creating a
+     *       duplicate reservation or a new identifier, then continues the Saga.</li>
+     *   <li>{@code stock_reserved} → continue with payment capture (idempotent by a key stable
+     *       per order, so it never double-charges);</li>
+     *   <li>any other status (terminal: {@code paid}/{@code payment_failed}/{@code rejected}/…)
+     *       → return as-is; the Saga has already reached a final decision.</li>
      * </ul>
      */
     private OrderResponse resumeSaga(int orderId) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> ApiException.conflict(
                         "Idempotency key already used but its order is missing"));
-        if (OrderStatus.STOCK_RESERVED.value().equals(order.getStatus())) {
+        String status = order.getStatus();
+        if (OrderStatus.PENDING.value().equals(status)) {
+            // Recover a pending order: re-attempt the idempotent reservation and continue.
+            List<OrderItem> lines = orderItemRepository.findByOrderIdOrderById(orderId);
+            return reserveAndContinue(orderId, lines, order.getTotalCents());
+        }
+        if (OrderStatus.STOCK_RESERVED.value().equals(status)) {
             return runPaymentAndFinalize(orderId, order.getTotalCents());
         }
         return OrderResponse.from(order);

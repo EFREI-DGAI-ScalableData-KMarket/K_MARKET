@@ -277,6 +277,46 @@ class OrderPaymentSagaIntegrationTest {
     // ---------------------------------------------------------------------
 
     @Test
+    void replayOfPendingOrder_afterUncertainReservation_recoversViaIdempotentReserve() {
+        // §5 recovery: first reservation is UNCERTAIN -> order stays 'pending' (502).
+        stockClient.outcome.set(StockReservationOutcome.UNCERTAIN);
+        String key = UUID.randomUUID().toString();
+
+        assertThatThrownBy(() -> orderService.createOrder(key, oneItem()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY));
+        int orderId = orderRepository.findAll().get(0).getId();
+        assertThat(orderRepository.findById(orderId).orElseThrow().getStatus()).isEqualTo("pending");
+
+        // Stock is now reachable; a replay with the SAME key re-runs the idempotent reserve and
+        // continues the Saga to completion — no duplicate order, no new identifier.
+        stockClient.outcome.set(StockReservationOutcome.RESERVED);
+        OrderResponse resumed = orderService.createOrder(key, oneItem());
+
+        assertThat(resumed.id()).isEqualTo(orderId);
+        assertThat(resumed.status()).isEqualTo("paid");
+        assertThat(orderRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void replayOfPendingOrder_whenReservationStillUncertain_staysPending() {
+        stockClient.outcome.set(StockReservationOutcome.UNCERTAIN);
+        String key = UUID.randomUUID().toString();
+
+        assertThatThrownBy(() -> orderService.createOrder(key, oneItem()))
+                .isInstanceOf(ApiException.class);
+        // Replay while Stock is still unreachable: must stay pending (502), never auto-reject.
+        assertThatThrownBy(() -> orderService.createOrder(key, oneItem()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY));
+
+        assertThat(orderRepository.findAll().get(0).getStatus()).isEqualTo("pending");
+        assertThat(paymentClient.captureCalls.get()).isZero();
+    }
+
+    @Test
     void insufficientStock_neverCallsPayment() {
         stockClient.outcome.set(StockReservationOutcome.INSUFFICIENT);
         String key = UUID.randomUUID().toString();
