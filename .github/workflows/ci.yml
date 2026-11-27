@@ -24,13 +24,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
       - name: "Générer le .env (depuis .env.example : secrets aléatoires, autres valeurs reprises)"
         run: |
           bash scripts/gen-env.sh > .env
           echo "SEED_ORDERS=2000" >> .env                      # seed réduit pour la CI
 
       - name: Construire et démarrer la pile (bases, seed, services, gateway)
-        run: docker compose up -d --build postgres mongo seed stock-service catalog-service dashboard-service gateway
+        run: docker compose up -d --build postgres mongo seed auth-service stock-service catalog-service dashboard-service gateway
 
       - name: Attendre la fin du seed
         run: |
@@ -41,11 +46,11 @@ jobs:
 
       - name: Attendre que les services répondent
         run: |
-          for url in http://localhost:8002/v1/health http://localhost:8004/v1/health http://localhost:8006/v1/health; do
+          for url in http://localhost:8005/v1/health http://localhost:8002/v1/health http://localhost:8004/v1/health http://localhost:8006/v1/health; do
             for _ in $(seq 60); do curl -fsS "$url" >/dev/null && break; sleep 2; done
             curl -fsS "$url"; echo
           done
-          # la gateway route bien vers les services (401 attendu sans jeton)
+          # la gateway contrôle le jeton (ForwardAuth → auth-service /auth/verify) : 401 attendu sans jeton
           for _ in $(seq 30); do
             [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/v1/warehouses)" = "401" ] && break; sleep 2
           done
@@ -61,6 +66,9 @@ jobs:
 
       - name: Tests du service Dashboard
         run: make test-dashboard
+
+      - name: Tests du service Auth (contrôleur, dont /auth/verify)
+        run: cd services/auth-service && ./mvnw -B -ntp test -Dtest=AuthControllerTest
 
       - name: Logs des conteneurs (en cas d'échec)
         if: failure()

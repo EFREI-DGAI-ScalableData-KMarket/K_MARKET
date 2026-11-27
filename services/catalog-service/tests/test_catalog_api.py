@@ -37,7 +37,7 @@ PRODUCT_FIELDS = """
 
 
 def token(*roles: str, expires_in: int = 600) -> dict:
-    claims = {"sub": "pytest", "roles": list(roles), "exp": int(time.time()) + expires_in}
+    claims = {"iss": "kmarket-auth", "sub": "tests", "roles": list(roles), "exp": int(time.time()) + expires_in}
     return {"Authorization": "Bearer " + jwt.encode(claims, SECRET, algorithm="HS256")}
 
 
@@ -136,11 +136,16 @@ def test_visiteur_et_client_ne_voient_pas_les_archives(headers, created):
 
 
 def test_jeton_expire_ou_mal_signe():
-    """Même en lecture publique, un jeton fourni doit être valide."""
-    assert_error(gql("{ product(product_id: 1) { name } }", headers=token("admin", expires_in=-10)), "UNAUTHORIZED")
+    """Même en lecture publique, un jeton fourni doit être valide.
+    Depuis le ForwardAuth (D8, mode optional), c'est la gateway qui refuse : HTTP 401 au format Error,
+    et non plus une erreur GraphQL dans une réponse 200."""
+    expired = token("admin", expires_in=-10)
     bad = {"Authorization": "Bearer " + jwt.encode({"roles": ["admin"], "exp": int(time.time()) + 60},
                                                    "mauvais-secret-de-test-assez-long", algorithm="HS256")}
-    assert_error(gql("{ product(product_id: 1) { name } }", headers=bad), "UNAUTHORIZED")
+    for headers in (expired, bad):
+        r = httpx.post(URL, json={"query": "{ product(product_id: 1) { name } }"}, headers=headers, timeout=10)
+        assert r.status_code == 401, r.text
+        assert r.json()["code"] == "UNAUTHORIZED"
 
 
 def test_lecture_tous_roles_ecriture_reservee():

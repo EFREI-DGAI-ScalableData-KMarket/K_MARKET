@@ -10,6 +10,7 @@ export const ORDER_STATUSES = [
   'shipped',
   'delivered',
   'payment_failed',
+  'rejected',
   'cancelled',
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
@@ -26,7 +27,7 @@ export type Order = {
   customer?: { id: number; name: string };
 };
 
-/** Schéma OrderDetail (GET /orders/{id}) : product_name vaut « Product #id » tant que le service n'appelle pas le catalogue. */
+/** Schéma OrderDetail (GET /orders/{id}) : product_name est figé à la commande (lu du Catalogue). */
 export type OrderDetail = Omit<Order, 'customer'> & {
   customer: { id: number; name: string; email: string } | null;
   items: { product_id: number; product_name: string; quantity: number; unit_price_cents: number; line_total_cents: number }[];

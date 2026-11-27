@@ -16,7 +16,7 @@ SECRET = os.environ["JWT_SECRET"]
 
 
 def token(*roles: str, expires_in: int = 600) -> dict:
-    claims = {"sub": "pytest", "roles": list(roles), "exp": int(time.time()) + expires_in}
+    claims = {"iss": "kmarket-auth", "sub": "tests", "roles": list(roles), "exp": int(time.time()) + expires_in}
     return {"Authorization": "Bearer " + jwt.encode(claims, SECRET, algorithm="HS256")}
 
 

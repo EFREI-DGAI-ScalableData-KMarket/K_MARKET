@@ -17,7 +17,6 @@ import psycopg
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, max as max_, max_by, sum as sum_, when, window
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-from datetime import datetime, timezone
 
 BOOTSTRAP = "kafka:19092"  # listener INTERNAL
 
@@ -99,7 +98,9 @@ def demand_per_minute(stock):
 
 
 def warehouse_fill(stock):
-    """Dernier remplissage connu de chaque entrepôt : chaque événement porte used/capacity après la modification."""
+    """Dernier remplissage connu de chaque entrepôt. Chaque événement du topic porte used/capacity après
+    la modification ; l'état initial vient des événements warehouse_snapshot écrits par le seed (jamais d'appel
+    à GET /warehouses, interdit à service_account)."""
     return (stock
             .withWatermark("occurred_at", WATERMARK)
             .dropDuplicatesWithinWatermark(["event_id"])
@@ -192,20 +193,6 @@ def evaluate_stock_alerts(conn):
     conn.execute("UPDATE analytics.stock_alerts SET active = false, updated_at = now() "
                  "WHERE active AND NOT (product_id = ANY(%s))", (selling_ids,))
 
-def bootstrap_warehouse_fill():
-    """Chargement initial : l'état complet des entrepôts lu par l'API Stock, avant de suivre le flux.
-    Un entrepôt sans mouvement depuis le démarrage de Kafka a ainsi quand même sa ligne."""
-    taken_at = datetime.now(timezone.utc)   # avant l'appel : les événements plus récents s'appliqueront ensuite
-    r = httpx.get(f"{STOCK_URL}/warehouses", headers={"Authorization": f"Bearer {service_token()}"}, timeout=10)
-    r.raise_for_status()
-    rows = []
-    for w in r.json():
-        rate = w["used_units"] / w["capacity_units"]
-        rows.append((w["id"], w["used_units"], w["capacity_units"], rate, rate > NEAR_FULL, taken_at, rate > NEAR_FULL))
-    with psycopg.connect(DSN, options="-c TimeZone=UTC") as conn:
-        conn.cursor().executemany(FILL_UPSERT, rows)
-    log.info("chargement initial du remplissage : %d entrepôts", len(rows))
-
 
 def to_postgres(df, name: str, sql: str, columns: list[str], after=None):
     """Chaque lot : les fenêtres modifiées (mode update) sont réécrites dans PostgreSQL.
@@ -238,11 +225,6 @@ def to_console(df, name: str, mode: str = "append"):
               .queryName(name).start())
 
 
-try:
-    bootstrap_warehouse_fill()
-except Exception:
-    # Stock ou Auth indisponible au démarrage : on suit quand même le flux (les entrepôts actifs apparaîtront).
-    log.exception("chargement initial du remplissage impossible")
 
 orders = read("orders.events", ORDER_EVENT)
 stock = read("inventory.stock-changed", STOCK_EVENT)

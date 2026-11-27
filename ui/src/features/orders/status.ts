@@ -11,6 +11,7 @@ export const ORDER_STATUS: Record<OrderStatus, { label: string; tone: Tone }> = 
   delivered: { label: 'Livrée', tone: 'ok' },
   payment_failed: { label: 'Paiement refusé', tone: 'bad' },
   cancelled: { label: 'Annulée', tone: 'neutral' },
+  rejected: { label: 'Refusée (stock)', tone: 'bad' }
 };
 
 /** Pastille de couleur (compteurs) assortie au ton du badge. */
@@ -35,6 +36,7 @@ const ALLOWED: Record<OrderStatus, readonly OrderStatus[]> = {
   shipped: ['delivered'],
   delivered: [],
   payment_failed: [],
+  rejected: [],
   cancelled: [],
 };
 
@@ -52,6 +54,6 @@ export const STEPS = [
 
 /** Rang dans la frise : -1 avant le paiement ; null pour une fin sans suite (refus, annulation). */
 export function stepIndex(status: OrderStatus): number | null {
-  if (status === 'payment_failed' || status === 'cancelled') return null;
+  if (status === 'payment_failed' || status === 'rejected' || status === 'cancelled') return null;
   return STEPS.findIndex((s) => s.status === status);
 }

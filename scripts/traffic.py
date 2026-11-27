@@ -5,7 +5,7 @@ Chaque cycle, choisi au hasard :
   - lecture catalogue (liste, fiche, recherche) ............ GraphQL /v1/catalog
   - lecture du stock et des entrepôts ...................... GET /v1/stock/{id}, /v1/warehouses
   - réservation puis libération (2 événements Kafka) ....... POST /v1/stock/reserve + /release
-  - commande (événement order_placed) ...................... POST /v1/orders
+  - commande (saga : catalogue + réservation du stock) ..... POST /v1/orders
   - quelques erreurs 4xx volontaires (produit inconnu) ..... pour la courbe d'erreurs
 Avec --sales : vraies ventes (reserve + commit), le stock baisse pour de bon ; --hot les concentre sur quelques produits.
 
@@ -34,7 +34,8 @@ SECRET = os.environ["JWT_SECRET"]
 
 
 def token(*roles):
-    claims = {"sub": "traffic", "roles": list(roles), "exp": int(time.time()) + 3600}
+    now = int(time.time())
+    claims = {"iss": "kmarket-auth", "sub": "tests", "roles": list(roles), "iat": now, "exp": now + 3600}
     return {"Authorization": "Bearer " + jwt.encode(claims, SECRET, algorithm="HS256")}
 
 
@@ -80,11 +81,12 @@ def reserve_release(c):
         count("release", c.post(f"{STOCK}/stock/release", headers=SERVICE, json={"order_id": order_id}))
 
 def place_order(c):
-    """Commande → événement order_placed (topic orders.events), pour les KPI du jour.
-    Tant que la saga n'existe pas, la commande est enregistrée « paid » et le stock n'est pas touché."""
-    products = random.sample(range(1, 301), k=random.randint(1, 3))
+    """Commande → saga d'orders-service : prix lus dans le Catalogue, stock réservé (stock_reserved),
+    ou refusée si le stock manque (422, rejected). Paniers < 200 € : au-dessus, le paiement refusera.
+    Tant que le paiement n'est pas branché, la réservation reste en place (le stock disponible baisse)."""
+    products = random.sample(range(1, 301), k=random.randint(1, 2))
     body = {"customer_id": random.randint(1, CUSTOMERS),
-            "items": [{"product_id": p, "quantity": random.randint(1, 3)} for p in products]}
+            "items": [{"product_id": p, "quantity": 1} for p in products]}
     headers = {**SERVICE, "Idempotency-Key": str(uuid.uuid4())}
     count("order", c.post(f"{ORDERS}/orders", headers=headers, json=body))
 
