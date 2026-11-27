@@ -39,19 +39,19 @@ public class OrderOwnership {
      *                      another customer, or the subject is not a usable id
      */
     public void assertCanCreateFor(Authentication authentication, Integer customerId) {
-        if (customerId == null) {
-            // Field-level @NotNull validation already covers this; guard defensively.
-            throw ApiException.badRequest("customer_id is required");
-        }
         if (hasAnyAuthority(authentication, CREATE_FOR_OTHERS_AUTHORITIES)) {
             return;
+        }
+        if (customerId == null) {
+            throw ApiException.badRequest("customer_id is required");
         }
 
         Integer subjectId = parseSubjectId(authentication);
         if (subjectId == null || !subjectId.equals(customerId)) {
             throw ApiException.forbidden(
-                    "You can only create orders for your own account (customer_id " + customerId + ")");
+                    "You can only create orders for your own account");
         }
+
     }
 
     /**
@@ -64,6 +64,17 @@ public class OrderOwnership {
      *
      * @throws ApiException {@code 404} if a non-privileged caller reads another customer's order
      */
+
+    public void assertCanRead(Authentication authentication, Integer ownerCustomerId) {
+        if (isPrivileged(authentication)) {
+            return;
+        }
+        Integer subjectId = parseSubjectId(authentication);
+        if (subjectId == null || !subjectId.equals(ownerCustomerId)) {
+            throw ApiException.notFound("You can only see your own orders");
+        }
+    }
+
     public void assertCanReadOrNotFound(Authentication authentication, Integer ownerCustomerId, int orderId) {
         if (isPrivileged(authentication)) {
             return;
@@ -86,21 +97,8 @@ public class OrderOwnership {
      *
      * @return the {@code customer_id} the service must filter on
      */
-    public Integer effectiveCustomerFilter(Authentication authentication, Integer requestedCustomerId) {
-        if (isPrivileged(authentication)) {
-            return requestedCustomerId;
-        }
-        Integer subjectId = parseSubjectId(authentication);
-        if (subjectId == null) {
-            throw ApiException.forbidden("You can only list your own orders");
-        }
-        if (requestedCustomerId != null && !requestedCustomerId.equals(subjectId)) {
-            throw ApiException.forbidden("You can only list your own orders");
-        }
-        return subjectId;
-    }
 
-    private boolean isPrivileged(Authentication authentication) {
+    public boolean isPrivileged(Authentication authentication) {
         return hasAnyAuthority(authentication, PRIVILEGED_AUTHORITIES);
     }
 
@@ -117,7 +115,7 @@ public class OrderOwnership {
     }
 
     /** The JWT subject is the user id (a numeric string); returns {@code null} if unusable. */
-    private Integer parseSubjectId(Authentication authentication) {
+    public Integer parseSubjectId(Authentication authentication) {
         if (authentication == null || authentication.getName() == null) {
             return null;
         }

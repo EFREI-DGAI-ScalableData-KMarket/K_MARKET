@@ -71,7 +71,8 @@ class OrderControllerTest {
         OrderResponse order = new OrderResponse(1, 42, "paid", 4990,
                 OffsetDateTime.parse("2024-01-01T10:00:00Z"),
                 OffsetDateTime.parse("2024-01-01T10:05:00Z"));
-        when(orderService.listOrders(isNull(), isNull(), eq(50), eq(0)))
+        // No customer_id requested -> the controller defaults it to the caller's own id (42).
+        when(orderService.listOrders(isNull(), eq(42), eq(50), eq(0)))
                 .thenReturn(new OrderListResponse(List.of(order), 1));
 
         mockMvc.perform(get("/orders"))
@@ -82,7 +83,7 @@ class OrderControllerTest {
                 .andExpect(jsonPath("$.items[0].status").value("paid"))
                 .andExpect(jsonPath("$.items[0].total_cents").value(4990));
 
-        verify(orderService).listOrders(null, null, 50, 0);
+        verify(orderService).listOrders(null, 42, 50, 0);
     }
 
     @Test
@@ -115,25 +116,85 @@ class OrderControllerTest {
 
     @Test
     @WithMockUser(username = "42", roles = "catalog_manager")
-    void listOrders_withoutBackOfficeRole_returnsForbidden() throws Exception {
-        // catalog_manager is not allowed to list orders (role rule).
-        mockMvc.perform(get("/orders"))
-                .andExpect(status().isForbidden());
-
-        verifyNoInteractions(orderService);
-    }
-
-    @Test
-    @WithMockUser(username = "42", roles = "service_account")
-    void listOrders_privileged_withoutFilter_listsAllCustomers() throws Exception {
-        when(orderService.listOrders(isNull(), isNull(), eq(50), eq(0)))
+    void listOrders_nonBackOfficeRole_listsOwnOrders() throws Exception {
+        // New logic: GET /orders is open to any authenticated caller; a non-privileged role
+        // is scoped to its own id (defaulted from the JWT subject), so catalog_manager -> 200
+        // and only ever sees customer 42's orders.
+        when(orderService.listOrders(isNull(), eq(42), eq(50), eq(0)))
                 .thenReturn(new OrderListResponse(List.of(), 0));
 
         mockMvc.perform(get("/orders"))
                 .andExpect(status().isOk());
 
-        // Privileged caller: no customer filter forced.
-        verify(orderService).listOrders(null, null, 50, 0);
+        verify(orderService).listOrders(null, 42, 50, 0);
+    }
+
+    @Test
+    @WithMockUser(username = "7", roles = "service_account")
+    void listOrders_privileged_withoutFilter_defaultsToOwnId() throws Exception {
+        // New logic: with no customer_id, the controller defaults it to the caller's own
+        // subject id (7) before the ownership check; privileged roles pass assertCanRead for
+        // any id. To list ALL customers a privileged caller must pass customer_id explicitly.
+        when(orderService.listOrders(isNull(), eq(7), eq(50), eq(0)))
+                .thenReturn(new OrderListResponse(List.of(), 0));
+
+        mockMvc.perform(get("/orders"))
+                .andExpect(status().isOk());
+
+        verify(orderService).listOrders(null, 7, 50, 0);
+    }
+
+    @Test
+    @WithMockUser(username = "7", roles = "service_account")
+    void listOrders_privileged_withExplicitFilter_listsThatCustomer() throws Exception {
+        // A privileged caller may still scope to any customer by passing customer_id explicitly.
+        when(orderService.listOrders(isNull(), eq(999), eq(50), eq(0)))
+                .thenReturn(new OrderListResponse(List.of(), 0));
+
+        mockMvc.perform(get("/orders").param("customer_id", "999"))
+                .andExpect(status().isOk());
+
+        verify(orderService).listOrders(null, 999, 50, 0);
+    }
+
+    // GET /orders role matrix (new logic): any authenticated role may list; non-privileged
+    // callers are scoped to their own id, privileged roles may use any customer_id. No role
+    // is rejected at the authorization layer (only missing/invalid JWT → 401).
+
+    @Test
+    @WithMockUser(username = "42", roles = "customer")
+    void listOrders_customerRole_listsOwnOrders() throws Exception {
+        when(orderService.listOrders(isNull(), eq(42), eq(50), eq(0)))
+                .thenReturn(new OrderListResponse(List.of(), 0));
+
+        mockMvc.perform(get("/orders"))
+                .andExpect(status().isOk());
+
+        verify(orderService).listOrders(null, 42, 50, 0);
+    }
+
+    @Test
+    @WithMockUser(username = "1", roles = "admin")
+    void listOrders_adminRole_isAllowed() throws Exception {
+        when(orderService.listOrders(isNull(), eq(1), eq(50), eq(0)))
+                .thenReturn(new OrderListResponse(List.of(), 0));
+
+        mockMvc.perform(get("/orders"))
+                .andExpect(status().isOk());
+
+        verify(orderService).listOrders(null, 1, 50, 0);
+    }
+
+    @Test
+    @WithMockUser(username = "3", roles = "logistics")
+    void listOrders_logisticsRole_isAllowed() throws Exception {
+        when(orderService.listOrders(isNull(), eq(3), eq(50), eq(0)))
+                .thenReturn(new OrderListResponse(List.of(), 0));
+
+        mockMvc.perform(get("/orders"))
+                .andExpect(status().isOk());
+
+        verify(orderService).listOrders(null, 3, 50, 0);
     }
 
     // ---------------------------------------------------------------------
@@ -156,7 +217,7 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_valid_returnsCreated() throws Exception {
         String key = UUID.randomUUID().toString();
         OrderResponse created = new OrderResponse(99, 42, "paid", 1980,
@@ -178,7 +239,7 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_missingIdempotencyKey_returnsBadRequest() throws Exception {
         mockMvc.perform(post("/orders")
                         .with(SecurityMockMvcRequestPostProcessors.csrf())
@@ -190,7 +251,7 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_nonUuidKey_returnsBadRequest() throws Exception {
         mockMvc.perform(post("/orders")
                         .with(SecurityMockMvcRequestPostProcessors.csrf())
@@ -203,7 +264,7 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_emptyItems_returnsBadRequest() throws Exception {
         mockMvc.perform(post("/orders")
                         .with(SecurityMockMvcRequestPostProcessors.csrf())
@@ -218,9 +279,9 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_forAnotherCustomer_returnsForbidden() throws Exception {
-        // Authenticated as subject 42 but ordering for customer 99 → ownership violation.
+        // Authorized role (customer) but subject 42 ordering for customer 99 → ownership violation.
         mockMvc.perform(post("/orders")
                         .with(SecurityMockMvcRequestPostProcessors.csrf())
                         .header("Idempotency-Key", UUID.randomUUID().toString())
@@ -256,7 +317,7 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_quantityAboveMaximum_returnsBadRequest() throws Exception {
         mockMvc.perform(post("/orders")
                         .with(SecurityMockMvcRequestPostProcessors.csrf())
@@ -271,7 +332,7 @@ class OrderControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "42", roles = "analyst")
+    @WithMockUser(username = "42", roles = "customer")
     void createOrder_quantityZero_returnsBadRequest() throws Exception {
         mockMvc.perform(post("/orders")
                         .with(SecurityMockMvcRequestPostProcessors.csrf())
@@ -281,6 +342,69 @@ class OrderControllerTest {
                                 {"customer_id":42,"items":[{"product_id":101,"quantity":0}]}"""))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    // ---------------------------------------------------------------------
+    // POST /orders — RBAC: only customer / admin / service_account may create
+    // ---------------------------------------------------------------------
+
+    @Test
+    @WithMockUser(username = "1", roles = "admin")
+    void createOrder_adminRole_isAllowed() throws Exception {
+        String key = UUID.randomUUID().toString();
+        OrderResponse created = new OrderResponse(5, 42, "paid", 1980,
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"),
+                OffsetDateTime.parse("2024-01-01T10:00:00Z"));
+        when(orderService.createOrder(eq(key), any())).thenReturn(created);
+
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(5));
+
+        verify(orderService).createOrder(eq(key), any());
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "analyst")
+    void createOrder_analystRole_returnsForbidden() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+        // RBAC is enforced before the controller: no order creation / Saga is triggered.
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "logistics")
+    void createOrder_logisticsRole_returnsForbidden() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    @WithMockUser(username = "42", roles = "catalog_manager")
+    void createOrder_catalogManagerRole_returnsForbidden() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
 
         verifyNoInteractions(orderService);
     }

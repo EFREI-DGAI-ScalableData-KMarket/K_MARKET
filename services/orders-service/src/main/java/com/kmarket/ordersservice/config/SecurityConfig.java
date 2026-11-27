@@ -56,13 +56,13 @@ public class SecurityConfig {
                         // Status change is internal / logistics only.
                         .requestMatchers(HttpMethod.PATCH, "/orders/*/status")
                                 .hasAnyRole("logistics", "admin", "service_account")
-                        // Listing all orders is a back-office read (ownership still scopes
-                        // non-privileged callers to their own orders in the controller).
-                        .requestMatchers(HttpMethod.GET, "/orders")
-                                .hasAnyRole("admin", "analyst", "logistics", "service_account")
-                        // Creating and reading a single order: any authenticated caller;
-                        // resource ownership is enforced in the controller (OrderOwnership).
-                        .requestMatchers(HttpMethod.POST, "/orders").authenticated()
+                        // Creating an order: customers (for themselves) + admin / service_account
+                        // (Saga / back-office). analyst, logistics, catalog_manager are refused (403).
+                        // Resource ownership is still enforced in the controller (OrderOwnership).
+                        .requestMatchers(HttpMethod.POST, "/orders")
+                                .hasAnyRole("customer", "admin", "service_account")
+                        // Reading a single order: any authenticated caller; ownership scopes
+                        // non-privileged callers to their own order (OrderOwnership).
                         .requestMatchers(HttpMethod.GET, "/orders/*").authenticated()
                         // Everything else needs a valid JWT
                         .anyRequest().authenticated())

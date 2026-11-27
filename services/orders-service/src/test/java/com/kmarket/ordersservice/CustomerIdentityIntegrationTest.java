@@ -122,17 +122,21 @@ class CustomerIdentityIntegrationTest {
                 .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    // 6. Customer 15 only sees their own orders in GET /orders (filter forced to own id).
+    // 6. Customer 15 only sees their own orders in GET /orders (listing defaults to own id,
+    //    and reading another customer's id is refused).
     @Test
-    void customer15_listFilterIsForcedToOwnId() {
-        // No requested filter -> forced to own id.
-        assertThat(orderOwnership.effectiveCustomerFilter(customerAuth(15), null)).isEqualTo(15);
-        // Requesting own id -> allowed.
-        assertThat(orderOwnership.effectiveCustomerFilter(customerAuth(15), 15)).isEqualTo(15);
-        // Requesting another customer's id -> 403.
-        assertThatThrownBy(() -> orderOwnership.effectiveCustomerFilter(customerAuth(15), 16))
+    void customer15_listingIsScopedToOwnId() {
+        Authentication me = customerAuth(15);
+        // No requested filter -> the controller defaults it to the caller's own subject id.
+        Integer defaulted = orderOwnership.parseSubjectId(me);
+        assertThat(defaulted).isEqualTo(15);
+        // Requesting own id -> allowed (no exception).
+        orderOwnership.assertCanRead(me, 15);
+        // Requesting another customer's id -> refused. A customer must not even learn that
+        // another customer's data exists, so assertCanRead denies with 404 (non-disclosure).
+        assertThatThrownBy(() -> orderOwnership.assertCanRead(me, 16))
                 .isInstanceOf(ApiException.class)
-                .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     // 7. Admin / service-account may act on any customer (create for others, read any, list any).
@@ -143,9 +147,9 @@ class CustomerIdentityIntegrationTest {
         orderOwnership.assertCanCreateFor(auth(2, "service_account"), 16);
         // admin may read any customer's order (no exception).
         orderOwnership.assertCanReadOrNotFound(auth(1, "admin"), 999, 100);
-        // service_account list filter is honoured as requested (incl. "all" = null).
-        assertThat(orderOwnership.effectiveCustomerFilter(auth(2, "service_account"), 999)).isEqualTo(999);
-        assertThat(orderOwnership.effectiveCustomerFilter(auth(1, "admin"), null)).isNull();
+        // Privileged listing: they may scope to any customer id (no exception from assertCanRead).
+        orderOwnership.assertCanRead(auth(2, "service_account"), 999);
+        orderOwnership.assertCanRead(auth(1, "admin"), 123);
     }
 
     // 8. Analyst / logistics: read-only privileged (may read/list any, but NOT create for others).
@@ -153,7 +157,7 @@ class CustomerIdentityIntegrationTest {
     void analystAndLogistics_mayReadAnyButNotCreateForOthers() {
         // May read any order and list any customer (privileged for read).
         orderOwnership.assertCanReadOrNotFound(auth(3, "analyst"), 999, 100);
-        assertThat(orderOwnership.effectiveCustomerFilter(auth(4, "logistics"), 999)).isEqualTo(999);
+        orderOwnership.assertCanRead(auth(4, "logistics"), 999);
         // But may NOT create an order for another customer (not in CREATE_FOR_OTHERS set).
         assertThatThrownBy(() -> orderOwnership.assertCanCreateFor(auth(3, "analyst"), 15))
                 .isInstanceOf(ApiException.class)

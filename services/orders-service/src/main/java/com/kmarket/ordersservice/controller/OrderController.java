@@ -63,9 +63,11 @@ public class OrderController {
             throw ApiException.badRequest("offset must be >= 0");
         }
         int effectiveLimit = Math.min(limit, MAX_LIMIT);
-
-        Integer effectiveCustomerId = orderOwnership.effectiveCustomerFilter(authentication, customerId);
-        return orderService.listOrders(status, effectiveCustomerId, effectiveLimit, offset);
+        if (customerId==null){
+            customerId = orderOwnership.parseSubjectId(authentication);
+        }
+        orderOwnership.assertCanRead(authentication,customerId);
+        return orderService.listOrders(status, customerId, effectiveLimit, offset);
     }
 
     /**
