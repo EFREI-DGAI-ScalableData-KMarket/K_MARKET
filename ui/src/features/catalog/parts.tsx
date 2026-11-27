@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { getRoles } from '../../auth/auth';
-import { can } from '../../auth/permissions';
+import { can, reservedTo } from '../../auth/permissions';
 import { Badge, Button, Notice } from '../../ui/ui';
+import { Locked } from '../../ui/Locked';
 import { AdjustStockDialog } from '../stock/AdjustStockDialog';
 import { useProductStock, type StockItem } from '../stock/api';
 import { stockLevel } from '../stock/levels';
@@ -23,7 +24,8 @@ const DATE_TIME = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeSty
 
 /**
  * Stock du produit entrepôt par entrepôt (le total des cartes est la somme de ces lignes).
- * admin et logistics peuvent ajuster chaque ligne (PUT /stock/{produit}/warehouses/{entrepôt}).
+ * admin et logistics peuvent ajuster chaque ligne (PUT /stock/{produit}/warehouses/{entrepôt}) ;
+ * pour les autres rôles, le bouton reste visible mais grisé (D9).
  */
 export function StockByWarehouse({ productId }: { productId: number }) {
   const stock = useProductStock(productId);
@@ -46,7 +48,7 @@ export function StockByWarehouse({ productId }: { productId: number }) {
             <tr className="bg-surface-2 text-left text-xs text-muted">
               <th className="px-4 py-2 font-semibold">Entrepôt</th>
               <th className="px-4 py-2 text-right font-semibold">Quantité</th>
-              {canAdjust && <th className="w-px px-4 py-2" aria-label="Actions" />}
+              <th className="w-px px-4 py-2" aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
@@ -54,13 +56,13 @@ export function StockByWarehouse({ productId }: { productId: number }) {
               <tr key={w.warehouse_id} className="border-t border-line">
                 <td className="px-4 py-2.5">{w.warehouse_name}</td>
                 <td className="px-4 py-2.5 text-right font-semibold">{w.quantity}</td>
-                {canAdjust && (
-                  <td className="px-3 py-1.5 text-right">
-                    <Button className="min-h-9 px-3 text-sm" onClick={() => setAdjusting(w)}>
+                <td className="px-3 py-1.5 text-right">
+                  <Locked locked={!canAdjust} reason={reservedTo('stock.update')}>
+                    <Button className="min-h-9 px-3 text-sm" disabled={!canAdjust} onClick={() => setAdjusting(w)}>
                       Ajuster
                     </Button>
-                  </td>
-                )}
+                  </Locked>
+                </td>
               </tr>
             ))}
             <tr className="border-t border-line bg-surface-2">
@@ -72,7 +74,7 @@ export function StockByWarehouse({ productId }: { productId: number }) {
                   {total_quantity}
                 </span>
               </td>
-              {canAdjust && <td />}
+              <td />
             </tr>
           </tbody>
         </table>

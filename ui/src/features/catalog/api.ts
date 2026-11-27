@@ -48,7 +48,7 @@ const FULL = `${SUMMARY} tags description
     ... on BeauteAttributes { marque contenance_ml beaute_type: type type_peau ingredients }
   }`;
 
-const TYPE_ALIAS: Partial<Record<Category, string>> = { Album: 'album_type', Merch: 'merch_type', Beaute: 'beaute_type' };
+export const TYPE_ALIAS: Partial<Record<Category, string>> = { Album: 'album_type', Merch: 'merch_type', Beaute: 'beaute_type' };
 
 export const PAGE_SIZE = 24;
 

@@ -1,0 +1,107 @@
+openapi: 3.1.0
+info:
+  title: K-Market — Dashboard (Vue d'ensemble)
+  version: v1
+  description: >
+    Chiffres du jour et alertes calculés par le job Spark temps réel (Kafka → fenêtres → schéma PostgreSQL analytics).
+    Le service ne fait que lire ce schéma ; il n'appelle aucun autre service.
+servers:
+  - url: /v1
+security:
+  - bearerAuth: []
+paths:
+  /dashboard/summary:
+    get:
+      summary: Chiffres du jour, commandes heure par heure, alertes de rupture et de saturation
+      description: "Rôles : admin, catalog_manager, analyst, logistics. Le jour est compté depuis minuit, heure de Paris."
+      operationId: getDashboardSummary
+      responses:
+        "200":
+          description: Résumé de la Vue d'ensemble
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Summary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /health:
+    get:
+      summary: Santé du service (public)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: v1 }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  responses:
+    Unauthorized:
+      description: Jeton absent, invalide ou expiré
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Rôle insuffisant
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: FORBIDDEN }
+        message: { type: string }
+    Summary:
+      type: object
+      required: [data_as_of, today, hourly, stock_alerts, warehouses]
+      properties:
+        data_as_of:
+          type: [string, "null"]
+          format: date-time
+          description: Dernière écriture du flux ; null si le flux n'a encore rien produit
+        today:
+          type: object
+          required: [orders, orders_paid, revenue_cents, average_basket_cents, payments_failed]
+          properties:
+            orders: { type: integer }
+            orders_paid: { type: integer }
+            revenue_cents: { type: integer }
+            average_basket_cents: { type: [integer, "null"], description: "revenue_cents / orders_paid ; null si aucune commande payée" }
+            payments_failed: { type: integer }
+        hourly:
+          type: array
+          items:
+            type: object
+            required: [hour, orders, revenue_cents]
+            properties:
+              hour: { type: string, format: date-time, description: "Début de l'heure (UTC)" }
+              orders: { type: integer }
+              revenue_cents: { type: integer }
+        stock_alerts:
+          type: array
+          description: Ruptures proches actives, de la plus urgente à la moins urgente
+          items:
+            type: object
+            required: [product_id, remaining_units, units_per_minute, minutes_left, raised_at]
+            properties:
+              product_id: { type: integer }
+              remaining_units: { type: integer }
+              units_per_minute: { type: number }
+              minutes_left: { type: number }
+              raised_at: { type: string, format: date-time }
+        warehouses:
+          type: array
+          items:
+            type: object
+            required: [warehouse_id, used_units, capacity_units, fill_rate, near_full, measured_at]
+            properties:
+              warehouse_id: { type: integer }
+              used_units: { type: integer }
+              capacity_units: { type: integer }
+              fill_rate: { type: number, description: "De 0 à 1" }
+              near_full: { type: boolean, description: "fill_rate > 0,90" }
+              near_full_since: { type: [string, "null"], format: date-time }
+              measured_at: { type: string, format: date-time }

@@ -7,5 +7,6 @@
 - `payments.openapi.yaml`
 - `auth.openapi.yaml`
 - `catalog.graphql`
+- `dashboard.openapi.yaml`
 
 Chaque contrat déclare la sécurité (`securitySchemes` en OpenAPI, erreurs 401/403 en GraphQL).

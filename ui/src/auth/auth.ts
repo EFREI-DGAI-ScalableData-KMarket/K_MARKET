@@ -10,7 +10,8 @@
  * Le refresh est partagé : si plusieurs appels reçoivent un 401 en même temps, un seul
  * POST /auth/refresh part et tous l'attendent (le refresh token ne sert qu'une fois).
  */
-export type Role = 'admin' | 'catalog_manager' | 'analyst' | 'logistics' | 'service_account';
+import { GESTION_LOGIN } from '../app/paths';
+export type Role = 'admin' | 'catalog_manager' | 'analyst' | 'logistics' | 'service_account' | 'customer';
 
 type TokenPair = { access_token: string; refresh_token: string | null; expires_in: number };
 
@@ -19,6 +20,7 @@ const REFRESH_KEY = 'kmarket.refresh_token';
 let token: string | null = null;
 let refreshing: Promise<boolean> | null = null;
 let redirecting = false;
+let email: string | null = null;
 
 export function getToken(): string | null {
   return token;
@@ -29,19 +31,37 @@ function storeTokens(pair: TokenPair): void {
   if (pair.refresh_token) sessionStorage.setItem(REFRESH_KEY, pair.refresh_token);
 }
 
+/**
+ * GET /auth/me : l'email n'est pas dans le jeton
+ */
+async function loadProfile(): Promise<void> {
+  if (!token || email) return;
+  try {
+    const res = await fetch('/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return;
+    const me: { email?: unknown } = await res.json();
+    email = typeof me.email === 'string' ? me.email : null;
+  } catch {
+    /* réseau : on garde la session, sans email */
+  }
+}
+
 function clearSession(): void {
   token = null;
+  email = null; 
   sessionStorage.removeItem(REFRESH_KEY);
 }
 
+
+
 /** POST /auth/login. Lève une Error dont le message est prêt à afficher. */
-export async function login(email: string, password: string): Promise<void> {
+export async function login(emailAddress: string, password: string): Promise<void> {
   let res: Response;
   try {
     res = await fetch('/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: emailAddress, password }),
     });
   } catch {
     throw new Error("Service d'authentification injoignable.");
@@ -57,8 +77,11 @@ export async function login(email: string, password: string): Promise<void> {
             : `Connexion impossible (erreur ${res.status}).`;
     throw new Error(message);
   }
+  email = null; 
   storeTokens(await res.json());
+  await loadProfile();
 }
+
 
 /** Obtient un nouvel access token. Un seul appel réseau, même si plusieurs requêtes le demandent. */
 export function refresh(): Promise<boolean> {
@@ -83,6 +106,7 @@ async function doRefresh(): Promise<boolean> {
     }
     if (!res.ok) return false; // 429, 5xx : on garde le refresh token pour un prochain essai
     storeTokens(await res.json());
+    await loadProfile();
     return true;
   } catch {
     return false; // réseau
@@ -109,15 +133,16 @@ export async function logout(): Promise<void> {
 }
 
 /** Session perdue en cours d'utilisation : retour à la page de connexion, puis à la page courante. */
+/** Session perdue en cours d'utilisation : retour à la page de connexion, puis à la page courante. */
 export function sessionExpired(): void {
   clearSession();
-  if (redirecting || location.pathname === '/login') return;
+  if (redirecting || location.pathname === GESTION_LOGIN) return;
   redirecting = true;
-  location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+  location.assign(`${GESTION_LOGIN}?next=${encodeURIComponent(location.pathname + location.search)}`);
 }
 
 /** Claims du JWT, décodés sans vérification (affichage seulement : c'est l'API qui décide, 401/403). */
-function claims(): { sub?: unknown; email?: unknown; roles?: unknown; exp?: unknown } {
+function claims(): { sub?: unknown; roles?: unknown; exp?: unknown } {
   if (!token) return {};
   try {
     const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
@@ -139,8 +164,7 @@ export function getSubject(): string | null {
   return typeof sub === 'string' ? sub : null;
 }
 
-/** Email de l'utilisateur (claim `email`, absent pour un compte technique). */
+/** Email de l'utilisateur, chargé par GET /auth/me (il n'est pas dans le jeton). */
 export function getEmail(): string | null {
-  const email = claims().email;
-  return typeof email === 'string' ? email : null;
+  return email;
 }

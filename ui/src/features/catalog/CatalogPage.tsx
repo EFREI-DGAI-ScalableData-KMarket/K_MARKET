@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getRoles } from '../../auth/auth';
-import { can } from '../../auth/permissions';
+import { can, reservedTo } from '../../auth/permissions';
 import { Button, Notice, Toast, fieldClass, type ToastData } from '../../ui/ui';
+import { Locked } from '../../ui/Locked';
 import { useStockTotals } from '../stock/api';
 import { PAGE_SIZE, useProducts, useSetStatus, type ProductFilter, type ProductStatus } from './api';
 import { CATEGORIES, CATEGORY_LABELS, type Category } from './categories';
@@ -104,11 +105,12 @@ export function CatalogPage() {
           <h1 className="m-0 text-[28px] font-extrabold tracking-tight">Catalogue</h1>
           <p className="m-0 text-sm text-muted">{products.data ? `${total} produit${total > 1 ? 's' : ''}` : ' '}</p>
         </div>
-        {canWrite && (
-          <Button variant="primary" onClick={() => setEditing('new')}>
+        {/* Visible pour tous, grisé sans le droit (D9). */}
+        <Locked locked={!canWrite} reason={reservedTo('catalog.write')}>
+          <Button variant="primary" disabled={!canWrite} onClick={() => setEditing('new')}>
             + Nouveau produit
           </Button>
-        )}
+        </Locked>
       </div>
 
       <div className="flex flex-wrap gap-3 rounded-[22px] border border-line bg-surface p-4">

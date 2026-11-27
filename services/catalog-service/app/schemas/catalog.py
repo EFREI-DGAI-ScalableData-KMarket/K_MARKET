@@ -1,4 +1,8 @@
-"""Schéma GraphQL du catalogue (Query + Mutation) — contrat : contracts/catalog.graphql."""
+"""Schéma GraphQL du catalogue (Query + Mutation) — contrat : contracts/catalog.graphql.
+
+Lectures publiques (D8) : un visiteur sans jeton ou un client (customer) ne voit que les produits actifs ;
+l'équipe et les comptes techniques voient aussi les archivés. Écritures : admin et catalog_manager seulement.
+"""
 from typing import List, Optional
 
 import strawberry
@@ -6,9 +10,9 @@ from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info
 
 from app.core.errors import gql_error
-from app.core.security import ALL_ROLES, WRITE_ROLES, require_roles
+from app.core.security import WRITE_ROLES, require_roles, sees_archived
 from app.schemas.types import (
-    InitialStock, Product, ProductFilter, ProductInput, ProductPage, ProductUpdateInput, to_product,
+    InitialStock, Product, ProductFilter, ProductInput, ProductPage, ProductStatus, ProductUpdateInput, to_product,
 )
 from app.services import stock_client
 from app.services.catalog import CatalogService
@@ -24,26 +28,40 @@ def service() -> CatalogService:
     return _service
 
 
+def _active_only(filter: Optional[ProductFilter]) -> ProductFilter:
+    """Même filtre, statut forcé à « active » (le visiteur ne peut pas demander les archivés)."""
+    f = filter or ProductFilter()
+    return ProductFilter(category=f.category, status=ProductStatus.active, search=f.search,
+                         min_price_cents=f.min_price_cents, max_price_cents=f.max_price_cents)
+
+
 @strawberry.type
 class Query:
-    @strawberry.field(description="Lister les produits (filtres + pagination, tri par product_id ou pertinence)")
+    @strawberry.field(description="Lister les produits (filtres + pagination, tri par product_id ou pertinence). "
+                                  "Public : sans jeton ou pour un client, produits actifs seulement")
     def products(self, info: Info, filter: Optional[ProductFilter] = None,
                  limit: int = 50, offset: int = 0) -> ProductPage:
-        require_roles(info, *ALL_ROLES)
+        if not sees_archived(info):
+            filter = _active_only(filter)
         docs, total = service().list_products(filter, limit, offset)
         return ProductPage(items=[to_product(d) for d in docs], total=total, has_more=offset + len(docs) < total)
 
-    @strawberry.field(description="Lire un produit ; null s'il n'existe pas")
+    @strawberry.field(description="Lire un produit ; null s'il n'existe pas (ou s'il est archivé, pour un visiteur ou un client)")
     def product(self, info: Info, product_id: int) -> Optional[Product]:
-        require_roles(info, *ALL_ROLES)
+        staff = sees_archived(info)              # toujours en premier : un jeton fourni doit être valide
         doc = service().get_product(product_id)
-        return to_product(doc) if doc else None
+        if doc is None or (doc["status"] != "active" and not staff):
+            return None
+        return to_product(doc)
 
     @strawberry.field(description="Lire plusieurs produits en un appel (orders-api : prix des lignes de commande). "
-                                  "Ordre de la demande ; les ids inconnus sont ignorés ; 200 ids maximum")
+                                  "Ordre de la demande ; les ids inconnus sont ignorés (et les archivés, pour un "
+                                  "visiteur ou un client) ; 200 ids maximum")
     def productsByIds(self, info: Info, ids: List[int]) -> List[Product]:
-        require_roles(info, *ALL_ROLES)
-        return [to_product(d) for d in service().get_products_by_ids(ids)]
+        docs = service().get_products_by_ids(ids)
+        if not sees_archived(info):
+            docs = [d for d in docs if d["status"] == "active"]
+        return [to_product(d) for d in docs]
 
 
 @strawberry.type

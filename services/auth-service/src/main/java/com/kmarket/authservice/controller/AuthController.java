@@ -19,6 +19,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+
+import com.kmarket.authservice.security.JwtService;
+import io.jsonwebtoken.JwtException;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.RequestParam;
+
 /** Public authentication endpoints: login, token refresh/exchange, logout and profile. */
 @RestController
 @RequestMapping("/auth")
@@ -26,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final JwtService jwtService;
 
     @PostMapping("/login")
     public TokenPair login(@Valid @RequestBody LoginRequest request) {
@@ -45,6 +52,35 @@ public class AuthController {
         return authService.exchangeApiKey(apiKey);
     }
 
+    /**
+     * Contrôle du jeton pour la gateway (ForwardAuth Traefik).
+     * Vérifie seulement la signature, l'émetteur et l'expiration : les rôles (403)
+     * restent contrôlés par chaque service.
+     * mode=strict (défaut) : jeton obligatoire. mode=optional (catalogue) : sans jeton, ça passe ;
+     * avec un jeton invalide, 401.
+     */
+    @GetMapping("/verify")
+    public ResponseEntity<Void> verify(
+            @RequestHeader(name = "Authorization", required = false) String authorization,
+            @RequestParam(name = "mode", defaultValue = "strict") String mode) {
+        if (authorization == null || authorization.isBlank()) {
+            if ("optional".equals(mode)) {
+                return ResponseEntity.ok().build();
+            }
+            throw ApiException.unauthorized("Missing bearer token");
+        }
+        if (!authorization.startsWith("Bearer ")) {
+            throw ApiException.unauthorized("Invalid Authorization header");
+        }
+        try {
+            jwtService.parse(authorization.substring("Bearer ".length()));
+        } catch (JwtException | IllegalArgumentException ex) {
+            throw ApiException.unauthorized("Invalid or expired token");
+        }
+        return ResponseEntity.ok().build();
+    }
+    
+    
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(Authentication authentication) {

@@ -10,6 +10,15 @@ http:
         average: 50
         period: 1s
         burst: 100
+    # Contrôle du jeton : Traefik appelle auth-service avant de transmettre la requête.
+    # 2xx : la requête passe ; sinon, la réponse d'auth-service (401) est renvoyée au client.
+    auth-strict:
+      forwardAuth:
+        address: "http://auth-service:8005/v1/auth/verify"
+    # Catalogue : lecture publique. Sans jeton, ça passe ; jeton invalide, 401.
+    auth-optional:
+      forwardAuth:
+        address: "http://auth-service:8005/v1/auth/verify?mode=optional"
 
     prometheus-api:
       replacePathRegex:
@@ -20,26 +29,42 @@ http:
     stock:
       rule: "PathPrefix(`/v1/stock`) || PathPrefix(`/v1/warehouses`) || PathPrefix(`/v1/shipments`)"
       entryPoints: [web]
-      middlewares: [rate-limit]
+      middlewares: [rate-limit, auth-strict]
       service: stock
 
     catalog:
       rule: "PathPrefix(`/v1/catalog`)"
       entryPoints: [web]
-      middlewares: [rate-limit]
+      middlewares: [rate-limit, auth-optional]
       service: catalog
 
     
+    # Connexion, renouvellement, échange de clé d'API : jamais de contrôle du jeton .
+    auth-public:
+      rule: "Path(`/v1/auth/login`) || Path(`/v1/auth/refresh`) || Path(`/v1/auth/token`)"
+      priority: 100
+      entryPoints: [web]
+      middlewares: [rate-limit]
+      service: auth
+
+    # /auth/me, /auth/logout, /admin/** : jeton obligatoire.
     auth:
       rule: "PathPrefix(`/v1/auth`) || PathPrefix(`/v1/admin`)"
+      entryPoints: [web]
+      middlewares: [rate-limit, auth-strict]
       service: auth
 
     orders:
       rule: "PathPrefix(`/v1/orders`)"
       entryPoints: [web]
-      middlewares: [rate-limit]   
+      middlewares: [rate-limit, auth-strict] 
       service: orders
 
+    dashboard:
+      rule: "PathPrefix(`/v1/dashboard`)"
+      entryPoints: [web]
+      middlewares: [rate-limit, auth-strict]
+      service: dashboard
 
     ui:
       rule: "PathPrefix(`/`)"
@@ -51,7 +76,7 @@ http:
     metrics:
       rule: "(Path(`/v1/metrics/query`) || Path(`/v1/metrics/alerts`)) && Method(`GET`)"
       entryPoints: [web]
-      middlewares: [rate-limit, prometheus-api]
+      middlewares: [rate-limit, auth-strict, prometheus-api]
       service: prometheus
 
   services:
@@ -75,6 +100,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://orders-service:8001"
+
+    dashboard:
+      loadBalancer:
+        servers:
+          - url: "http://dashboard-service:8006"
 
     ui:
       loadBalancer:

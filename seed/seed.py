@@ -25,7 +25,7 @@ from pathlib import Path
 import bcrypt
 import psycopg2
 from faker import Faker
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 from pymongo import MongoClient
 
 # Règle métier du service Paiement : refus au-dessus de 200 €.
@@ -352,7 +352,15 @@ def build_stock(products, warehouses, now):
         rows += [(pid, wid, max(6, round(wt / total_w * remainder)), now) for pid, wt in scalable[wid]]
     return rows
 
+def warehouse_snapshot(wid, capacity, used_units, now):
+    """État initial d'un entrepôt, au format des événements de stock-service (_emit).
 
+    Publié dans Kafka par le relais de l'outbox : le job temps réel (volet 4) connaît le remplissage
+    de chaque entrepôt sans appeler GET /warehouses, interdit à service_account par la matrice du sujet.
+    """
+    return {"event_id": str(uuid.uuid4()), "event_type": "warehouse_snapshot",
+            "occurred_at": now.isoformat(), "warehouse_id": wid,
+            "warehouse_used_units": used_units, "warehouse_capacity_units": capacity}
 
 # Commandes, paiements, réservations, livraisons
 
@@ -605,6 +613,13 @@ def main():
             ins("INSERT INTO inventory.warehouses (id, name, capacity_units) VALUES %s",
                 [(wid, name, cap) for wid, name, cap, _ in warehouses])
             ins("INSERT INTO inventory.stock (product_id, warehouse_id, quantity, updated_at) VALUES %s", stock_rows)
+            # Un événement d'état initial par entrepôt dans l'outbox (le relais le publie dans Kafka).
+            used = {}
+            for _pid, wid, qty, _ts in stock_rows:
+                used[wid] = used.get(wid, 0) + qty
+            ins("INSERT INTO inventory.outbox (topic, event_key, payload) VALUES %s",
+                [("inventory.stock-changed", str(wid), Json(warehouse_snapshot(wid, cap, used.get(wid, 0), now)))
+                 for wid, _name, cap, _fill in warehouses])
             ins("INSERT INTO orders.customers (id, name, email, created_at, user_id) VALUES %s", customer_rows)
 
             buf = {"o": [], "i": [], "p": [], "r": [], "s": [],"k": []}

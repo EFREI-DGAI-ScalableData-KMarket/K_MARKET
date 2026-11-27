@@ -5,9 +5,11 @@ Chaque cycle, choisi au hasard :
   - lecture catalogue (liste, fiche, recherche) ............ GraphQL /v1/catalog
   - lecture du stock et des entrepôts ...................... GET /v1/stock/{id}, /v1/warehouses
   - réservation puis libération (2 événements Kafka) ....... POST /v1/stock/reserve + /release
+  - commande (saga : catalogue + réservation du stock) ..... POST /v1/orders
   - quelques erreurs 4xx volontaires (produit inconnu) ..... pour la courbe d'erreurs
+Avec --sales : vraies ventes (reserve + commit), le stock baisse pour de bon ; --hot les concentre sur quelques produits.
 
-Les réservations sont toujours libérées : le stock final est inchangé.
+Sans --sales, les réservations sont toujours libérées : le stock final est inchangé.
 Usage : python scripts/traffic.py --duration 120 --rps 10    (ou make traffic DURATION=120 RPS=10)
 Variable : JWT_SECRET (lue dans .env par le Makefile), BASE_URL (défaut : la gateway).
 """
@@ -21,15 +23,19 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import jwt
-
+import uuid
 BASE = os.getenv("BASE_URL", "http://localhost:8000/v1")          # la gateway
 STOCK = os.getenv("STOCK_URL", BASE)
 CATALOG = os.getenv("CATALOG_URL", f"{BASE}/catalog")
+ORDERS = os.getenv("ORDERS_URL", BASE)
+CUSTOMERS = int(os.getenv("TRAFFIC_CUSTOMERS", "500"))   # ids clients existants : 1..N
+HOT: list[int] = []                                       # produits vendus en priorité (--hot)
 SECRET = os.environ["JWT_SECRET"]
 
 
 def token(*roles):
-    claims = {"sub": "traffic", "roles": list(roles), "exp": int(time.time()) + 3600}
+    now = int(time.time())
+    claims = {"iss": "kmarket-auth", "sub": "tests", "roles": list(roles), "iat": now, "exp": now + 3600}
     return {"Authorization": "Bearer " + jwt.encode(claims, SECRET, algorithm="HS256")}
 
 
@@ -74,6 +80,28 @@ def reserve_release(c):
         time.sleep(random.uniform(0.05, 0.3))                     # le « paiement »
         count("release", c.post(f"{STOCK}/stock/release", headers=SERVICE, json={"order_id": order_id}))
 
+def place_order(c):
+    """Commande → saga d'orders-service : prix lus dans le Catalogue, stock réservé (stock_reserved),
+    ou refusée si le stock manque (422, rejected). Paniers < 200 € : au-dessus, le paiement refusera.
+    Tant que le paiement n'est pas branché, la réservation reste en place (le stock disponible baisse)."""
+    products = random.sample(range(1, 301), k=random.randint(1, 2))
+    body = {"customer_id": random.randint(1, CUSTOMERS),
+            "items": [{"product_id": p, "quantity": 1} for p in products]}
+    headers = {**SERVICE, "Idempotency-Key": str(uuid.uuid4())}
+    count("order", c.post(f"{ORDERS}/orders", headers=headers, json=body))
+
+
+def sale(c):
+    """Vente réelle : réservation puis validation (commit). Le stock baisse pour de bon.
+    80 % des ventes portent sur les produits --hot, pour faire apparaître une rupture proche."""
+    order_id = random.randint(900_000_000, 2_000_000_000)
+    product = random.choice(HOT) if HOT and random.random() < 0.8 else random.randint(1, 300)
+    items = [{"product_id": product, "quantity": random.randint(1, 3)}]
+    r = c.post(f"{STOCK}/stock/reserve", headers=SERVICE, json={"order_id": order_id, "items": items})
+    count("sale-reserve", r)                                       # 409 si le stock ne suffit plus
+    if r.status_code == 201:
+        count("sale-commit", c.post(f"{STOCK}/stock/commit", headers=SERVICE, json={"order_id": order_id}))
+
 
 def errors_4xx(c):
     """404 volontaires : alimentent la courbe des erreurs 4xx sans déclencher d'alerte (seuls les 5xx alertent)."""
@@ -88,7 +116,7 @@ def run_safely(fn, c):
             stats[f"{fn.__name__} injoignable ({type(e).__name__})"] += 1
 
 
-ACTIONS = [(catalog_read, 40), (stock_read, 30), (reserve_release, 25), (errors_4xx, 5)]
+ACTIONS = [(catalog_read, 35), (stock_read, 25), (reserve_release, 20), (place_order, 15), (errors_4xx, 5)]
 
 
 def main():
@@ -96,9 +124,13 @@ def main():
     p.add_argument("--duration", type=int, default=120, help="secondes (défaut 120)")
     p.add_argument("--rps", type=float, default=10, help="actions par seconde (défaut 10)")
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--sales", action="store_true", help="ajoute de vraies ventes (reserve + commit) : le stock baisse")
+    p.add_argument("--hot", default="", help="produits vendus en priorité, ex. 23,154 (avec --sales)")
     args = p.parse_args()
 
-    funcs, weights = zip(*ACTIONS)
+    HOT.extend(int(x) for x in args.hot.split(",") if x.strip())
+    actions = ACTIONS + ([(sale, 20)] if args.sales else [])
+    funcs, weights = zip(*actions)
     stop_at = time.time() + args.duration
     print(f"Trafic vers {STOCK} et {CATALOG} : {args.rps} actions/s pendant {args.duration} s (Ctrl+C pour arrêter)")
     with httpx.Client(timeout=10) as c, ThreadPoolExecutor(args.workers) as pool:

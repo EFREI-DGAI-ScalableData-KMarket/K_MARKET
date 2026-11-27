@@ -53,3 +53,23 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Kafka : {{ $labels.consumergroup }} a plus de 1 000 messages de retard"
+      # --- Flux temps réel (Spark) : indicateurs du tableau « Streaming et rôles » ---
+      - alert: StreamLag
+        expr: max(kmarket_stream_kafka_offsets_behind) > 1000
+        for: 30s
+        labels: { severity: warning, job: spark-realtime }
+        annotations:
+          summary: "Flux temps réel : plus de 1 000 messages Kafka pas encore lus (cible admin)"
+
+      - alert: StreamErrors
+        expr: sum(increase(kmarket_stream_batch_errors_total[5m])) > 0
+        labels: { severity: warning, job: spark-realtime }
+        annotations:
+          summary: "Flux temps réel : erreurs pendant les lots (API Stock ou Auth injoignable)"
+
+      - alert: StreamSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(kmarket_stream_event_latency_seconds_bucket[5m]))) > 5
+        for: 2m
+        labels: { severity: warning, job: spark-realtime }
+        annotations:
+          summary: "Flux temps réel : latence événement → base p95 au-dessus de 5 s (cible logistics)"

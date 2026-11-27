@@ -19,6 +19,8 @@ services:
       INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?voir .env}
       PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?voir .env}
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?voir .env}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?voir .env}
+      DASHBOARD_DB_PASSWORD: ${DASHBOARD_DB_PASSWORD:?voir .env}
     command: ["postgres", "-c", "wal_level=logical"]   # prêt pour un CDC (Debezium) plus tard
     ports:
       - "127.0.0.1:5432:5432"
@@ -93,6 +95,31 @@ services:
       OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: "metrics,health"
     ports:
       - "127.0.0.1:8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # API de la Vue d'ensemble (REST, FastAPI) : lit le schéma analytics écrit par le job Spark temps réel.
+  dashboard-service:
+    build: ./services/dashboard-service
+    container_name: dashboard-service
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dashboard_svc
+      POSTGRES_PASSWORD: ${DASHBOARD_DB_PASSWORD:?voir .env}
+      POSTGRES_DB: kmarket
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+      OTEL_SERVICE_NAME: dashboard-service
+      OTEL_TRACES_EXPORTER: otlp_proto_http
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: "metrics,health"
+    ports:
+      - "127.0.0.1:8006:8006"
     depends_on:
       postgres:
         condition: service_healthy
@@ -396,8 +423,9 @@ services:
 
   # Spark : jobs de streaming (Kafka) et transformations du Data Lake
   # Image officielle Apache Spark (bitnami/spark a été retiré de Docker Hub mi-2025).
-  spark-master:
-    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+  spark-master:    
+    build: ./spark
+    image: kmarket-spark
     container_name: spark-master
     profiles: ["spark"]
     restart: unless-stopped
@@ -405,14 +433,24 @@ services:
     environment:
       SPARK_NO_DAEMONIZE: "true"
       SPARK_MASTER_HOST: spark-master
+      ANALYTICS_DSN: postgresql://analytics_svc:${ANALYTICS_DB_PASSWORD:?voir .env}@postgres:5432/kmarket
+      STOCK_URL: http://stock-service:8002/v1
+      AUTH_URL: http://auth-service:8005/v1
+      STREAM_CONSUMER_API_KEY: ${STREAM_CONSUMER_API_KEY:?voir .env}
+    depends_on:
+      - postgres
     ports:
       - "127.0.0.1:7077:7077"   # URL du master (spark://spark-master:7077)
       - "127.0.0.1:8081:8080"   # interface web du master
+      - "127.0.0.1:4040:4040"   # interface du job en cours (Structured Streaming)
+      - "127.0.0.1:9101:9101"   # métriques du job temps réel (Prometheus : spark-master:9101)
     volumes:
       - ./spark:/opt/spark-apps:ro
+      - sparkcheckpoints:/opt/spark-checkpoints
 
   spark-worker:
-    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+    build: ./spark
+    image: kmarket-spark
     container_name: spark-worker
     profiles: ["spark"]
     restart: unless-stopped
@@ -425,6 +463,7 @@ services:
       - spark-master
     volumes:
       - ./spark:/opt/spark-apps:ro
+      - sparkcheckpoints:/opt/spark-checkpoints
 
   
   ui:
@@ -438,3 +477,4 @@ volumes:
   kafkadata:
   miniodata:
   promdata:
+  sparkcheckpoints:

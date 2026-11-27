@@ -50,6 +50,9 @@ class AuthControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private JwtService jwtService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @MockitoBean
@@ -253,5 +256,60 @@ class AuthControllerTest {
         user.setCreatedAt(OffsetDateTime.now());
         user.setRoles(List.of(role));
         return user;
+    }
+
+    // ---------------------------------------------------------------------
+    // GET /auth/verify (ForwardAuth de la gateway)
+    // ---------------------------------------------------------------------
+
+    @Test
+    @WithAnonymousUser
+    void verify_withValidToken_returnsOk() throws Exception {
+        String token = jwtService.generateServiceToken("orders-api", "service_account");
+
+        mockMvc.perform(get("/auth/verify").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void verify_withoutToken_strict_returnsUnauthorized() throws Exception {
+        mockMvc.perform(get("/auth/verify"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void verify_withoutToken_optional_returnsOk() throws Exception {
+        mockMvc.perform(get("/auth/verify").param("mode", "optional"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void verify_withTamperedToken_optional_returnsUnauthorized() throws Exception {
+        // Jeton présent mais modifié : même en mode optional, c'est un 401 (D8).
+        String token = jwtService.generateServiceToken("orders-api", "service_account") + "x";
+
+        mockMvc.perform(get("/auth/verify").param("mode", "optional")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void verify_withNonBearerHeader_returnsUnauthorized() throws Exception {
+        mockMvc.perform(get("/auth/verify").header("Authorization", "Basic abc"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void verify_neverCallsAuthService() throws Exception {
+        // /verify ne touche pas la base : vérification locale du jeton uniquement.
+        mockMvc.perform(get("/auth/verify").param("mode", "optional"));
+        verifyNoInteractions(authService);
     }
 }
