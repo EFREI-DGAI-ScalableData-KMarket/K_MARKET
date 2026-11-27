@@ -35,7 +35,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Même règle que l'onglet Observabilité de l'UI : ARRÊTÉ si /metrics ne répond plus ; DÉGRADÉ si une alerte de alerts.yml est déclenchée pour ce composant (5xx > 5 %, p95 > 500 ms, outbox > 100…) ; sinon OK.",
+      "description": "Messages publiés mais pas encore lus, par groupe de consommateurs. Spark n'utilise pas de groupe : son retard est dans la ligne « Flux temps réel ». Cible du sujet : moins de 1 000.",
       "gridPos": {
         "h": 4,
         "w": 3,
@@ -1053,6 +1053,94 @@
           "sort": "none"
         }
       }
+    },
+    {
+      "type": "row", "title": "Flux temps réel (Spark) : indicateurs par rôle", "id": 20, "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 }, "panels": []
+    },
+    {
+      "type": "timeseries", "title": "admin · Lag Kafka du job (messages)", "id": 21,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Messages publiés dans Kafka pas encore lus par Spark (max des partitions). Cible : < 1 000.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 46 },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "expr": "kmarket_stream_kafka_offsets_behind", "legendFormat": "{{query}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short",
+        "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "line" } },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1000 }] } },
+        "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "admin · Erreurs du flux (par 5 min)", "id": 22,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Lots dont l'évaluation des alertes a échoué (API Stock ou Auth injoignable). Les KPI continuent.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 46 },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "expr": "sum by (query) (increase(kmarket_stream_batch_errors_total[5m]))", "legendFormat": "{{query}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "logistics · Débit du flux (événements/s)", "id": 23,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Reçus et traités par seconde, par requête Spark (dernier lot).",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kmarket_stream_input_rows_per_second", "legendFormat": "{{query}} reçus", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kmarket_stream_processed_rows_per_second", "legendFormat": "{{query}} traités", "refId": "B" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "logistics · Latence événement → base, p95 (s)", "id": 24,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Borne haute : latence du plus ancien événement de chaque lot (occurred_at → fin du lot). Cible : p95 < 5 s.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 54 },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "expr": "histogram_quantile(0.95, sum by (query, le) (rate(kmarket_stream_event_latency_seconds_bucket[5m])))",
+        "legendFormat": "{{query}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s",
+        "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "line" } },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 5 }] } },
+        "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "analyst · Fraîcheur des KPI (s)", "id": 25,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Âge de l'événement le plus récent pris en compte dans les KPI de commandes. Cible : < 60 s.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 54 },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "expr": "kmarket_stream_event_lag_seconds{query=\"kpi_orders\"}", "legendFormat": "kpi_orders", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s",
+        "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "line" } },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 60 }] } },
+        "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "analyst · Événements tardifs écartés (%)", "id": 26,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Part des événements écartés par le watermark (2 min) sur 5 min. Justifie le réglage du watermark : doit rester à 0, y compris pendant une panne de Kafka.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 54 },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "expr": "100 * sum by (query) (increase(kmarket_stream_rows_dropped_by_watermark_total[5m])) / clamp_min(sum by (query) (increase(kmarket_stream_input_rows_total[5m])), 1)",
+        "legendFormat": "{{query}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "custom": { "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "Optimisation (C2.4) · Durée des lots (s)", "id": 27,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Durée de chaque micro-lot. À comparer avant/après un réglage (cœurs du worker, shuffle.partitions…).",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 62 },
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "expr": "kmarket_stream_batch_duration_seconds", "legendFormat": "{{query}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
     }
   ],
   "templating": {

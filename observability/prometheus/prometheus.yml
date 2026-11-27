@@ -28,3 +28,6 @@ scrape_configs:
   - job_name: dashboard
     static_configs:
       - targets: ["dashboard-service:8006"]
+
+  - job_name: spark-realtime             # job Spark (make realtime) : DOWN tant que le job n'est pas lancé
+    static_configs: [{ targets: ["spark-master:9101"] }]

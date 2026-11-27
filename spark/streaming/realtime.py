@@ -17,6 +17,10 @@ import psycopg
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, max as max_, max_by, sum as sum_, when, window
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+from datetime import datetime, timezone
+
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from pyspark.sql.streaming import StreamingQueryListener
 
 BOOTSTRAP = "kafka:19092"  # listener INTERNAL
 
@@ -61,7 +65,67 @@ HORIZON_MINUTES = 5      # rythme de vente calculé sur les 5 dernières minutes
 ALERT_MINUTES = 30       # alerte si le stock tient moins de 30 minutes à ce rythme
 NEAR_FULL = 0.90          # saturation proche au-dessus de 90 % (sujet, onglet Logistique)
 
+# --- Surveillance du flux (exigée par le sujet : débit, lag, erreurs ; tableau « Streaming et rôles ») ---
+# Le driver tourne dans le conteneur spark-master (make realtime) : Prometheus lit spark-master:9101/metrics.
+METRICS_PORT = 9101
+INPUT_RATE = Gauge("kmarket_stream_input_rows_per_second", "Événements reçus par seconde (dernier lot)", ["query"])
+PROCESS_RATE = Gauge("kmarket_stream_processed_rows_per_second", "Événements traités par seconde (dernier lot)", ["query"])
+BATCH_DURATION = Gauge("kmarket_stream_batch_duration_seconds", "Durée du dernier lot", ["query"])
+OFFSETS_BEHIND = Gauge("kmarket_stream_kafka_offsets_behind", "Lag Kafka : messages publiés pas encore lus (max des partitions)", ["query"])
+EVENT_LAG = Gauge("kmarket_stream_event_lag_seconds", "Fraîcheur : âge de l'événement le plus récent à la fin du lot", ["query"])
+EVENT_LATENCY = Histogram("kmarket_stream_event_latency_seconds",
+                          "Latence événement → base du plus ancien événement de chaque lot (borne haute)", ["query"],
+                          buckets=(0.5, 1, 2, 3, 5, 10, 30, 60, 120))
+INPUT_ROWS = Counter("kmarket_stream_input_rows_total", "Événements lus", ["query"])
+DROPPED = Counter("kmarket_stream_rows_dropped_by_watermark_total", "Événements écartés car trop en retard (watermark)", ["query"])
+ERRORS = Counter("kmarket_stream_batch_errors_total", "Erreurs pendant un lot (API Stock ou Auth injoignable)", ["query"])
+LAST_PROGRESS = Gauge("kmarket_stream_last_progress_timestamp_seconds", "Heure du dernier lot terminé", ["query"])
 
+
+def _event_time(value):
+    """Heure d'événement donnée par Spark (ISO 8601 en « Z ») ; None si le lot n'en a pas."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
+class StreamMetrics(StreamingQueryListener):
+    """Spark appelle onQueryProgress à la fin de chaque lot de chaque requête : on recopie le
+    StreamingQueryProgress dans les métriques Prometheus. Aucun calcul supplémentaire sur les données."""
+
+    def __init__(self):
+        self.names = {}                                    # id de requête -> nom (l'événement idle n'a que l'id)
+
+    def onQueryStarted(self, event):
+        self.names[event.id] = event.name
+
+    def onQueryProgress(self, event):
+        p = event.progress
+        q = p.name
+        INPUT_RATE.labels(q).set(p.inputRowsPerSecond or 0)
+        PROCESS_RATE.labels(q).set(p.processedRowsPerSecond or 0)
+        BATCH_DURATION.labels(q).set((p.durationMs or {}).get("triggerExecution", 0) / 1000)
+        INPUT_ROWS.labels(q).inc(p.numInputRows or 0)
+        DROPPED.labels(q).inc(sum(op.numRowsDroppedByWatermark for op in p.stateOperators))
+        behind = [float(s.metrics.get("maxOffsetsBehindLatest") or 0) for s in p.sources if s.metrics]
+        OFFSETS_BEHIND.labels(q).set(max(behind, default=0))
+        now = datetime.now(timezone.utc)
+        newest, oldest = _event_time((p.eventTime or {}).get("max")), _event_time((p.eventTime or {}).get("min"))
+        if newest:
+            EVENT_LAG.labels(q).set((now - newest).total_seconds())
+        if oldest:
+            EVENT_LATENCY.labels(q).observe((now - oldest).total_seconds())
+        LAST_PROGRESS.labels(q).set_to_current_time()
+
+    def onQueryIdle(self, event):
+        # Plus aucun événement : Spark a lu tout Kafka, les résultats sont à jour (fraîcheur 0, débit 0).
+        q = self.names.get(event.id)
+        if q:
+            INPUT_RATE.labels(q).set(0)
+            PROCESS_RATE.labels(q).set(0)
+            EVENT_LAG.labels(q).set(0)
+            LAST_PROGRESS.labels(q).set_to_current_time()
+
+    def onQueryTerminated(self, event):
+        pass
 
 def read(topic: str, schema: StructType):
     raw = (spark.readStream.format("kafka")
@@ -199,7 +263,7 @@ def to_postgres(df, name: str, sql: str, columns: list[str], after=None):
     Écrire en écrasant rend le lot rejouable : après une panne, Spark le rejoue et la base reste juste.
     `after(conn)` : traitement facultatif après l'écriture (ici, l'évaluation des alertes)."""
     flat = df.select(col("window.start").alias("window_start"), col("window.end").alias("window_end"), "*").drop("window")
-
+    ERRORS.labels(name)          # crée la série à 0 : Grafana affiche 0 au lieu de « No data »
     def write(batch, batch_id):
         rows = [tuple(r[c] for c in columns) for r in batch.collect()]
         if not rows:
@@ -213,6 +277,7 @@ def to_postgres(df, name: str, sql: str, columns: list[str], after=None):
             except Exception:
                 # API Stock ou auth indisponible : on le note et on continue. Les KPI ne s'arrêtent pas,
                 # et le lot suivant recalcule les alertes depuis la table.
+                ERRORS.labels(name).inc()
                 log.exception("évaluation des alertes impossible (lot %s)", batch_id)
 
     return (flat.writeStream.outputMode("update").foreachBatch(write)
@@ -224,7 +289,9 @@ def to_console(df, name: str, mode: str = "append"):
               .option("checkpointLocation", f"/tmp/checkpoints/console-{name}")
               .queryName(name).start())
 
-
+start_http_server(METRICS_PORT)
+spark.streams.addListener(StreamMetrics())
+log.info("métriques du flux sur :%d/metrics", METRICS_PORT)
 
 orders = read("orders.events", ORDER_EVENT)
 stock = read("inventory.stock-changed", STOCK_EVENT)
