@@ -4,6 +4,7 @@ CREATE TABLE orders.customers (
     id          SERIAL PRIMARY KEY,
     name        TEXT        NOT NULL,
     email       TEXT        NOT NULL UNIQUE,   -- donnée personnelle : pseudonymisée dès la zone staging du lake
+    user_id  INTEGER UNIQUE,  -- auth.users.id du compte client ; sans FK : autre service, comme product_id
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

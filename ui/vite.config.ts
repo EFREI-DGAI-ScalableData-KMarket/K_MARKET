@@ -12,6 +12,10 @@ export default defineConfig(({ mode }) => {
     process.env.VITE_GRAFANA_URL = `https://${CODESPACE_NAME}-3000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}`;
   }
 
+  if (!env.VITE_JAEGER_URL && CODESPACE_NAME && GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN) {
+    process.env.VITE_JAEGER_URL = `https://${CODESPACE_NAME}-16686.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}`;
+  }
+
   return {
     plugins: [react(), tailwindcss()],
     server: {

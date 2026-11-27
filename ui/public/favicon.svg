@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
+  <style>
+    .bg { fill: #b83265 } .ink { fill: #ffffff } .ink-line { stroke: #ffffff } .k { stroke: #b83265 }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #f2a7c3 } .ink { fill: #1a1418 } .ink-line { stroke: #1a1418 } .k { stroke: #f2a7c3 }
+    }
+  </style>
+  <rect width="40" height="40" rx="11" class="bg"/>
+  <path d="M15.5 15v-2.5a4.5 4.5 0 0 1 9 0V15" fill="none" stroke-width="2" stroke-linecap="round" class="ink-line"/>
+  <path d="M10.5 15h19l-1.4 16.2a2.2 2.2 0 0 1-2.2 2h-11.8a2.2 2.2 0 0 1-2.2-2Z" class="ink"/>
+  <path d="M17 19.5v10M23.5 19.5 17.4 24.5l6.1 5" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="k"/>
+  <path d="M32 5.5c.3 1.6.7 2 2.3 2.3-1.6.3-2 .7-2.3 2.3-.3-1.6-.7-2-2.3-2.3 1.6-.3 2-.7 2.3-2.3Z" class="ink"/>
+</svg>

@@ -4,8 +4,14 @@ pydantic
 pydantic-settings
 psycopg[binary]
 httpx
-pyjwt
-pytest
 PyJWT
+pytest
 prometheus-fastapi-instrumentator
 confluent-kafka
+# Traces OpenTelemetry (instrumentation automatique, envoi OTLP/HTTP vers Jaeger)
+opentelemetry-distro
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
+opentelemetry-instrumentation-psycopg
+opentelemetry-instrumentation-logging

@@ -55,6 +55,7 @@ INSERT INTO auth.roles (name, description) VALUES
     ('catalog_manager', 'Équipe catalogue : créer et modifier les produits et les prix, lire les stocks'),
     ('analyst',         'Équipe BI et marketing : lire les commandes, le catalogue, les stocks et les chiffres du jour'),
     ('logistics',       'Équipe logistique : lire les commandes, lire et mettre à jour les stocks et les entrepôts'),
-    ('service_account', 'Compte technique d''un service : seulement les appels dont le service a besoin');
+    ('service_account', 'Compte technique d''un service : seulement les appels dont le service a besoin'),
+    ('customer', 'Client du site : lire le catalogue, créer une commande, lire ses propres commandes et les suivre');
 
 COMMIT;
