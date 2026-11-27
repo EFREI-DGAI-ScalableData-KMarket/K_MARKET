@@ -88,4 +88,54 @@ public class StockRestClient implements StockClient {
             return StockReservationOutcome.UNCERTAIN;
         }
     }
+
+    @Override
+    public StockOperationOutcome commit(int orderId) {
+        return orderScopedOperation("/stock/commit", orderId, "commit");
+    }
+
+    @Override
+    public StockOperationOutcome release(int orderId) {
+        return orderScopedOperation("/stock/release", orderId, "release");
+    }
+
+    /**
+     * Shared body for {@code POST /stock/commit} and {@code POST /stock/release}: both take an
+     * {@code {order_id}} body and are idempotent. Classifies the response into a
+     * {@link StockOperationOutcome} (2xx → DONE, 404 → NOT_FOUND, anything else/transport →
+     * UNCERTAIN) so the Saga never assumes a timeout meant the operation failed.
+     */
+    private StockOperationOutcome orderScopedOperation(String uri, int orderId, String action) {
+        String token;
+        try {
+            token = tokenProvider.getToken();
+        } catch (RuntimeException ex) {
+            log.warn("Stock {} for order {} aborted: no service token", action, orderId, ex);
+            return StockOperationOutcome.UNCERTAIN;
+        }
+
+        Map<String, Object> body = Map.of("order_id", orderId);
+        try {
+            return restClient.post()
+                    .uri(uri)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + token)
+                    .body(body)
+                    .exchange((request, response) -> {
+                        HttpStatus status = HttpStatus.resolve(response.getStatusCode().value());
+                        if (status != null && status.is2xxSuccessful()) {
+                            return StockOperationOutcome.DONE;
+                        }
+                        if (status == HttpStatus.NOT_FOUND) {
+                            return StockOperationOutcome.NOT_FOUND;
+                        }
+                        log.warn("Stock {} for order {} returned unexpected status {}",
+                                action, orderId, response.getStatusCode());
+                        return StockOperationOutcome.UNCERTAIN;
+                    });
+        } catch (Exception ex) {
+            log.warn("Stock {} for order {} failed (treated as UNCERTAIN)", action, orderId, ex);
+            return StockOperationOutcome.UNCERTAIN;
+        }
+    }
 }

@@ -47,6 +47,16 @@ d'environnement :
 | `ORDERS_DB_USER` | `orders_svc` | Rôle de connexion |
 | `ORDERS_DB_PASSWORD` | `orders` | Mot de passe du rôle (= `ORDERS_DB_PASSWORD` du `.env`) |
 | `ORDERS_SERVICE_PORT` | `8001` | Port HTTP |
+| `CATALOG_BASE_URL` | *(vide)* | URL du Catalogue (GraphQL) : validation produits + prix |
+| `STOCK_BASE_URL` | *(vide)* | URL du Stock (REST) : réservation / commit / release (Saga) |
+| `PAYMENT_BASE_URL` | *(vide)* | URL du Paiement (REST) : encaissement / remboursement (Saga) |
+| `AUTH_BASE_URL` | *(vide)* | URL d'auth-service : échange `ORDERS_API_KEY` → JWT `service_account` |
+| `ORDERS_API_KEY` | *(vide)* | Clé d'API technique de Commandes (identité service à service) |
+
+> Les appels Saga (Stock, Paiement) utilisent l'identité `service_account` (décision D6),
+> jamais le jeton de l'utilisateur final. Quand `STOCK_BASE_URL` ou `PAYMENT_BASE_URL` est
+> vide, l'étape correspondante renvoie un résultat *incertain* et la commande reste dans un
+> état récupérable (le service démarre même si Stock/Paiement sont indisponibles).
 
 > ⚠️ Lancé hors Docker, le process **ne lit pas** le `.env` du repo. Soit les défauts
 > ci-dessus suffisent, soit exporte la variable (ex. `ORDERS_DB_PASSWORD=orders ./mvnw spring-boot:run`).
@@ -155,15 +165,84 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## 7. Tests
+## 7. Saga de création de commande (Stock + Paiement)
+
+`POST /orders` orchestre une **Saga** en transactions locales courtes : chaque changement
+de statut est committé en base **avec** son événement outbox (atomicité), et les appels
+distants (Catalogue, Stock, Paiement) sont faits **entre** ces transactions, jamais dans
+une transaction longue.
+
+```
+POST /orders
+  Tx1  persister la commande 'pending' (+ lignes + idempotence + event order_placed)
+  ├─ Stock   POST /stock/reserve
+  │    RESERVED     → Tx: 'stock_reserved'
+  │    INSUFFICIENT → Tx: 'rejected'   + 422  (paiement jamais tenté)
+  │    UNCERTAIN    → reste 'pending'  + 502  (réconciliation)
+  ├─ Paiement POST /payments   (Idempotency-Key stable, dérivé de l'order_id)
+  │    SUCCEEDED    → Stock POST /stock/commit → Tx: 'paid'
+  │    DECLINED     → Stock POST /stock/release → Tx: 'payment_failed' + 402
+  │    UNCERTAIN    → reste 'stock_reserved' + 502  (réconciliation)
+  └─ réponse Order (schéma du contrat)
+```
+
+**Dépendance au Payment Service.** L'étape 3 appelle `payment-service`
+(`PAYMENT_BASE_URL`, défaut Docker `http://payment-service:8003/v1`). Le client
+(`PaymentClient` / `PaymentRestClient`) :
+
+- envoie `order_id`, `amount_cents`, `currency=EUR` conformément à `payments.openapi.yaml` ;
+- s'authentifie en `service_account` (même mécanisme que les appels Stock) ;
+- utilise un **`Idempotency-Key` déterministe par commande** (`PaymentClient.paymentKey`,
+  un UUID dérivé de l'`order_id`) : un **retry réutilise toujours la même clé**, jamais une
+  nouvelle, donc aucun double débit — y compris après un redémarrage du process ;
+- distingue **succès** (201), **refus métier** (422) et **échec technique / timeout** (autre /
+  transport → *incertain*).
+
+**Tolérance aux pannes & récupération.**
+
+- Un **timeout de paiement** n'est pas un échec : la commande reste `stock_reserved` et un
+  rejeu (ou un job de réconciliation) **relit** le résultat via `GET /payments/{order_id}`
+  avec la **même** clé, sans relancer de paiement. Le rejeu reprend la Saga depuis le statut
+  **persisté** (recovery après redémarrage, pas d'état en mémoire).
+- Une **libération de stock incertaine** (compensation) ne « termine » pas la compensation :
+  la commande reste `stock_reserved` (502) jusqu'à réconciliation, elle n'est pas marquée
+  `payment_failed` à tort.
+- **Payé mais commit du stock définitivement impossible** (`/stock/commit` → 404) : la
+  commande n'est pas laissée `paid` ni « release + payment_failed » en silence ; le paiement
+  est **remboursé** (`POST /payments/{order_id}/refund`) puis la commande passe
+  `payment_failed` (409). Un commit simplement *incertain* laisse la commande
+  `stock_reserved` pour un retry idempotent (le paiement déjà réussi est conservé).
+
+**Idempotence de bout en bout.** Rejouer `POST /orders` avec la même `Idempotency-Key` ne
+crée pas de seconde commande, ne réserve pas deux fois et ne débite pas deux fois ; les
+statuts terminaux ne sont jamais écrasés par une requête obsolète (transitions validées par
+`OrderStatus`).
+
+**Événements Kafka.** Les transitions `pending → stock_reserved`, `stock_reserved → paid` et
+`stock_reserved → payment_failed` émettent un `order_status_changed` via l'**outbox**
+transactionnel existant (pas de producteur Kafka dans `PaymentClient`, pas de topic
+`payments.events`).
+
+---
+
+## 8. Tests
 
 ```bash
-# Tests web (slice MockMvc, sans base) + test de contexte (Testcontainers PostgreSQL)
+# Tests web (slice MockMvc, sans base) + tests d'intégration (Testcontainers PostgreSQL)
 ./mvnw test
 ```
 
 - `OrderControllerTest` — exerce la sécurité (`401`/`200`), le mapping JSON,
   le plafonnement de `limit` et la validation des paramètres.
+- `OrderCreateIntegrationTest` — cœur transactionnel de `POST /orders` (persistance,
+  idempotence, chemin nominal jusqu'à `paid`).
+- `OrderPaymentSagaIntegrationTest` — leg paiement de la Saga : succès → `paid` (+ commit),
+  refus → stock libéré + `payment_failed`, timeout → récupération sans double paiement,
+  issue inconnue → commande récupérable, release en échec → compensation non « terminée »,
+  stock insuffisant → paiement jamais appelé, rejeu idempotent → pas de second paiement.
+- `PaymentRestClientTest` / `StockRestClientTest` — mapping HTTP → issue, en-têtes
+  d'auth/idempotence et corps conformes aux contrats (Mockito / `MockRestServiceServer`).
+- `OutboxAtomicityIntegrationTest` / `OutboxRelayIntegrationTest` — atomicité et relais outbox.
 - `OrdersServiceApplicationTests` — démarre le contexte complet contre un PostgreSQL
   jetable (Testcontainers) initialisé avec `src/test/resources/db/orders-schema.sql`.
 
@@ -171,7 +250,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## 8. Structure du projet
+## 9. Structure du projet
 
 ```
 orders-service/
@@ -179,14 +258,21 @@ orders-service/
 ├── mvnw / mvnw.cmd         # Maven Wrapper (pas besoin d'installer Maven)
 └── src/main/java/com/kmarket/ordersservice/
     ├── OrdersServiceApplication.java
-    ├── config/     # SecurityConfig (resource server JWT), OpenApiConfig (Swagger)
-    ├── controller/ # OrderController (GET /orders), HealthController
+    ├── client/     # StockClient/StockRestClient (reserve/commit/release),
+    │               #   PaymentClient/PaymentRestClient (capture/lookup/refund),
+    │               #   ServiceTokenProvider (JWT service_account), *Outcome enums
+    ├── config/     # SecurityConfig (resource server JWT), OpenApiConfig, StockConfig, PaymentConfig
+    ├── controller/ # OrderController (GET/POST /orders, status), HealthController
     ├── dto/        # OrderResponse, OrderListResponse, ErrorResponse, HealthResponse
-    ├── entity/     # Order, OrderItem, Customer, IdempotencyKey (JPA → schéma orders)
-    ├── repository/ # OrderRepository (Spring Data JPA + Specifications)
-    ├── service/    # OrderService (filtres status/customer_id, tri, pagination)
+    ├── domain/     # OrderStatus (statuts + transitions autorisées)
+    ├── entity/     # Order, OrderItem, Customer, IdempotencyKey, OutboxEvent (JPA → schéma orders)
+    ├── event/      # OrderEvent, OrderEventPublisher (outbox)
+    ├── outbox/     # OutboxRelay (publication Kafka)
+    ├── repository/ # OrderRepository (Spring Data JPA + Specifications), …
+    ├── service/    # OrderService (Saga POST /orders, filtres/tri/pagination GET /orders)
     ├── exception/  # ApiException + GlobalExceptionHandler (schéma Error)
     └── health/     # DatabaseConnectionTester (sonde au démarrage)
 ```
 
 Le contrat OpenAPI de référence est `contracts/orders.openapi.yaml` (à la racine du projet).
+Le contrat du Paiement appelé par la Saga est `contracts/payments.openapi.yaml`.

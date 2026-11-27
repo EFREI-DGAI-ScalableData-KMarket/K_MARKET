@@ -2,7 +2,10 @@ package com.kmarket.ordersservice.service;
 
 import com.kmarket.ordersservice.catalog.CatalogProduct;
 import com.kmarket.ordersservice.catalog.ProductCatalog;
+import com.kmarket.ordersservice.client.PaymentClient;
+import com.kmarket.ordersservice.client.PaymentOutcome;
 import com.kmarket.ordersservice.client.StockClient;
+import com.kmarket.ordersservice.client.StockOperationOutcome;
 import com.kmarket.ordersservice.client.StockReservationOutcome;
 import com.kmarket.ordersservice.domain.OrderStatus;
 import com.kmarket.ordersservice.dto.OrderCreateRequest;
@@ -53,6 +56,7 @@ public class OrderService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ProductCatalog productCatalog;
     private final StockClient stockClient;
+    private final PaymentClient paymentClient;
     private final OrderEventPublisher orderEventPublisher;
 
     /**
@@ -175,53 +179,50 @@ public class OrderService {
     }
 
     /**
-     * Creates an order and runs the first Saga step: reserve the stock.
+     * Creates an order and orchestrates the full Saga: reserve stock, capture payment,
+     * then finalize or compensate.
      *
-     * <p>Orchestration (external calls are kept <em>outside</em> any database transaction):</p>
+     * <p>External calls are kept <em>outside</em> any database transaction; each status
+     * change is its own short local transaction that also stages the matching outbox event
+     * atomically (see {@link #transition}).</p>
      * <ol>
      *   <li><b>Tx1</b> — {@link #persistPendingOrder}: validate idempotency/customer, price the
      *       lines via the Catalog, and persist the order as {@code pending} with its lines,
-     *       idempotency key and {@code order_placed} event, all atomically.</li>
-     *   <li><b>Stock reserve</b> (no transaction): {@code POST /stock/reserve}, idempotent by
-     *       {@code order_id}.</li>
-     *   <li><b>Tx2</b> — depending on the outcome:
-     *     <ul>
-     *       <li>{@code RESERVED} → transition {@code pending → stock_reserved}.</li>
-     *       <li>{@code INSUFFICIENT} → transition {@code pending → rejected} (no payment is
-     *           attempted) and surface {@code 422} to the caller; the rejected order stays
-     *           persisted and visible.</li>
-     *       <li>{@code UNCERTAIN} (timeout / transport) → leave the order {@code pending} and
-     *           surface {@code 502}; a reconciliation job must resolve it later. This is
-     *           deliberately NOT treated as insufficient stock.</li>
-     *     </ul>
-     *   </li>
+     *       idempotency key and {@code order_placed} event, all atomically. An idempotent
+     *       replay returns here and resumes the Saga from the order's persisted status
+     *       (recovery after an interruption/restart), never re-charging.</li>
+     *   <li><b>Stock reserve</b> ({@code POST /stock/reserve}, idempotent by {@code order_id}):
+     *       {@code RESERVED} → {@code stock_reserved}; {@code INSUFFICIENT} → {@code rejected}
+     *       + {@code 422} (no payment attempted); {@code UNCERTAIN} → stays {@code pending}
+     *       + {@code 502} for reconciliation.</li>
+     *   <li><b>Payment capture</b> ({@code POST /payments}, idempotent by a key stable per
+     *       order): {@code SUCCEEDED} → commit stock then {@code paid}; {@code DECLINED} →
+     *       release stock then {@code payment_failed}; {@code UNCERTAIN} (timeout/lost
+     *       response) → the order stays {@code stock_reserved} + {@code 502}; the real
+     *       outcome is recovered later via {@code GET /payments/{order_id}} with the same
+     *       key, never by starting a second payment.</li>
      * </ol>
-     *
-     * <p>Idempotency: replaying the same key with the same request returns the existing order
-     * (the stock reserve is itself idempotent by {@code order_id}); a different payload is a
-     * {@code 409}.</p>
      *
      * @param idempotencyKey the client-supplied {@code Idempotency-Key} header
      * @param request        the validated order payload
-     * @return the created order after the reservation attempt
+     * @return the created order after the Saga has run as far as it safely can
      */
     public OrderResponse createOrder(String idempotencyKey, OrderCreateRequest request) {
         // Tx1: persist the order as pending (or return the existing one on idempotent replay).
         PersistResult persisted = self.persistPendingOrder(idempotencyKey, request);
         if (persisted.replay()) {
-            return persisted.response();
+            // A replay is not necessarily a completed Saga: resume it from the persisted
+            // status so a retry after an interruption/restart finishes the flow safely
+            // (relies on durable DB state, not in-memory progress).
+            return resumeSaga(persisted.response().id());
         }
 
         int orderId = persisted.response().id();
 
-        // Stock reservation — external call, deliberately outside any DB transaction.
-        StockReservationOutcome outcome = stockClient.reserve(orderId, persisted.lines());
-
-        // Tx2: record the outcome.
-        switch (outcome) {
-            case RESERVED -> {
-                return self.transition(orderId, OrderStatus.STOCK_RESERVED);
-            }
+        // Step 2 — Stock reservation (external call, outside any DB transaction).
+        StockReservationOutcome reservation = stockClient.reserve(orderId, persisted.lines());
+        switch (reservation) {
+            case RESERVED -> self.transition(orderId, OrderStatus.STOCK_RESERVED);
             case INSUFFICIENT -> {
                 self.transition(orderId, OrderStatus.REJECTED);
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
@@ -231,6 +232,114 @@ public class OrderService {
             default -> throw ApiException.upstream(
                     "Stock reservation outcome is uncertain for order " + orderId
                             + "; the order stays pending for reconciliation");
+        }
+
+        // Step 3 — Payment capture (external call, outside any DB transaction).
+        return runPaymentAndFinalize(orderId, persisted.response().totalCents());
+    }
+
+    /**
+     * Resumes the Saga for an order that already exists (idempotent replay / post-restart
+     * recovery), driven by its durable status rather than any in-memory progress:
+     * <ul>
+     *   <li>{@code stock_reserved} → continue with payment capture (which is idempotent by a
+     *       key stable per order, so it never double-charges);</li>
+     *   <li>any other status (terminal or still {@code pending}) → return as-is. A still
+     *       {@code pending} order had an uncertain reservation and is left for reconciliation.</li>
+     * </ul>
+     */
+    private OrderResponse resumeSaga(int orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> ApiException.conflict(
+                        "Idempotency key already used but its order is missing"));
+        if (OrderStatus.STOCK_RESERVED.value().equals(order.getStatus())) {
+            return runPaymentAndFinalize(orderId, order.getTotalCents());
+        }
+        return OrderResponse.from(order);
+    }
+
+    /**
+     * Step 3 of the Saga for a {@code stock_reserved} order: capture the payment (idempotent
+     * by a key stable per order), then finalize or compensate.
+     * <ul>
+     *   <li>{@code SUCCEEDED} → commit the stock reservation, then transition to {@code paid};
+     *       if the commit is definitively impossible, refund and fail (see
+     *       {@link #finalizePaidOrder}).</li>
+     *   <li>{@code DECLINED} → release the stock (compensation), then transition to
+     *       {@code payment_failed}; surface {@code 402}.</li>
+     *   <li>{@code UNCERTAIN} → leave the order {@code stock_reserved} and surface {@code 502};
+     *       the outcome is recoverable later via the lookup endpoint with the same key.</li>
+     * </ul>
+     */
+    private OrderResponse runPaymentAndFinalize(int orderId, int totalCents) {
+        String paymentKey = PaymentClient.paymentKey(orderId);
+        PaymentOutcome payment = paymentClient.capture(orderId, totalCents, paymentKey);
+        switch (payment) {
+            case SUCCEEDED -> {
+                return finalizePaidOrder(orderId);
+            }
+            case DECLINED -> {
+                compensateReleaseStock(orderId);
+                self.transition(orderId, OrderStatus.PAYMENT_FAILED);
+                throw new ApiException(HttpStatus.PAYMENT_REQUIRED,
+                        "PAYMENT_FAILED",
+                        "Payment was declined for order " + orderId
+                                + "; the stock reservation has been released");
+            }
+            default -> throw ApiException.upstream(
+                    "Payment outcome is uncertain for order " + orderId
+                            + "; the order stays stock_reserved for reconciliation");
+        }
+    }
+
+    /**
+     * Finalizes a successfully paid order: commit the stock reservation ({@code /stock/commit}),
+     * then transition {@code stock_reserved → paid}.
+     *
+     * <p>Saga policy for the awkward "paid but stock commit fails" case: the customer has been
+     * charged, so we must NOT silently release stock and mark {@code payment_failed}. If the
+     * commit is <em>definitively</em> impossible ({@code NOT_FOUND}: the reservation no longer
+     * exists), we compensate the payment with a refund ({@code POST /payments/{id}/refund}) and
+     * move the order to {@code payment_failed} (no stock was committed, money is returned). If
+     * the commit outcome is merely {@code UNCERTAIN} (timeout), we do NOT assume failure: the
+     * order stays {@code stock_reserved} and {@code 502} is returned so a retry/reconciliation
+     * re-runs the idempotent commit — the customer keeps their (already succeeded) payment.</li>
+     */
+    private OrderResponse finalizePaidOrder(int orderId) {
+        StockOperationOutcome commit = stockClient.commit(orderId);
+        switch (commit) {
+            case DONE -> {
+                return self.transition(orderId, OrderStatus.PAID);
+            }
+            case NOT_FOUND -> {
+                // Definitive: the reservation is gone, so the order cannot be fulfilled even
+                // though payment succeeded. Refund the charge, then fail the order.
+                paymentClient.refund(orderId);
+                self.transition(orderId, OrderStatus.PAYMENT_FAILED);
+                throw new ApiException(HttpStatus.CONFLICT,
+                        "STOCK_COMMIT_FAILED",
+                        "Payment succeeded but the stock reservation for order " + orderId
+                                + " is gone; the payment has been refunded");
+            }
+            default -> throw ApiException.upstream(
+                    "Stock commit is uncertain for order " + orderId
+                            + "; payment already succeeded, the order stays stock_reserved for reconciliation");
+        }
+    }
+
+    /**
+     * Compensation: release the stock reservation for a declined order. The release is
+     * idempotent; {@code NOT_FOUND} means there was nothing to release (already clean). An
+     * {@code UNCERTAIN} release must NOT let the Saga "complete" the compensation as if it
+     * had succeeded, so it surfaces a {@code 502} for reconciliation (the order stays
+     * {@code stock_reserved}).
+     */
+    private void compensateReleaseStock(int orderId) {
+        StockOperationOutcome release = stockClient.release(orderId);
+        if (release == StockOperationOutcome.UNCERTAIN) {
+            throw ApiException.upstream(
+                    "Stock release is uncertain for order " + orderId
+                            + "; cannot complete payment_failed compensation, leaving it for reconciliation");
         }
     }
 

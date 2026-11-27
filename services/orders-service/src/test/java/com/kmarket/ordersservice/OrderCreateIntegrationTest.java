@@ -7,6 +7,7 @@ import com.kmarket.ordersservice.entity.Customer;
 import com.kmarket.ordersservice.entity.OrderItem;
 import com.kmarket.ordersservice.event.OrderEvent;
 import com.kmarket.ordersservice.exception.ApiException;
+import com.kmarket.ordersservice.client.PaymentOutcome;
 import com.kmarket.ordersservice.client.StockReservationOutcome;
 import com.kmarket.ordersservice.repository.CustomerRepository;
 import com.kmarket.ordersservice.repository.IdempotencyKeyRepository;
@@ -33,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * (Testcontainers) PostgreSQL seeded with the {@code orders} schema.
  */
 @SpringBootTest
-@Import({TestcontainersConfiguration.class, TestCatalogConfiguration.class, TestStockConfiguration.class})
+@Import({TestcontainersConfiguration.class, TestCatalogConfiguration.class, TestStockConfiguration.class, TestPaymentConfiguration.class})
 @TestPropertySource(properties = "orders.outbox.relay.enabled=false")
 class OrderCreateIntegrationTest {
 
@@ -51,6 +52,8 @@ class OrderCreateIntegrationTest {
     private OutboxEventRepository outboxEventRepository;
     @Autowired
     private TestStockConfiguration.ControllableStockClient stockClient;
+    @Autowired
+    private TestPaymentConfiguration.ControllablePaymentClient paymentClient;
 
     private Integer customerId;
 
@@ -62,6 +65,7 @@ class OrderCreateIntegrationTest {
         orderRepository.deleteAll();
         customerRepository.deleteAll();
         stockClient.outcome.set(StockReservationOutcome.RESERVED);
+        paymentClient.captureOutcome.set(PaymentOutcome.SUCCEEDED);
 
         Customer customer = new Customer();
         customer.setName("Alice");
@@ -78,11 +82,11 @@ class OrderCreateIntegrationTest {
 
         OrderResponse created = orderService.createOrder(key, request);
 
-        // Order head persisted with a computed total; after a successful reservation the
-        // Saga has moved it pending -> stock_reserved.
+        // Order head persisted with a computed total; after a successful reservation AND
+        // payment the Saga has moved it pending -> stock_reserved -> paid.
         assertThat(created.id()).isNotNull();
         assertThat(created.customerId()).isEqualTo(customerId);
-        assertThat(created.status()).isEqualTo("stock_reserved");
+        assertThat(created.status()).isEqualTo("paid");
         assertThat(created.totalCents()).isPositive();
         assertThat(created.createdAt()).isNotNull();
 
@@ -91,8 +95,8 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isEqualTo(2);
         assertThat(idempotencyKeyRepository.findById(key)).isPresent();
 
-        // Two events staged: order_placed (Tx1) + order_status_changed to stock_reserved (Tx2).
-        assertThat(outboxEventRepository.count()).isEqualTo(2);
+        // Three events staged: order_placed (Tx1) + status_changed to stock_reserved + to paid.
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
         var placed = outboxEventRepository.findAll().stream()
                 .filter(e -> e.getPayload().contains(OrderEvent.ORDER_PLACED))
                 .findFirst()
@@ -141,8 +145,8 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isEqualTo(1);
         assertThat(idempotencyKeyRepository.count()).isEqualTo(1);
 
-        // First create staged two events (placed + stock_reserved); the replay stages none.
-        assertThat(outboxEventRepository.count()).isEqualTo(2);
+        // First create staged three events (placed + stock_reserved + paid); replay stages none.
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
     }
 
     @Test
@@ -163,7 +167,7 @@ class OrderCreateIntegrationTest {
         // The original order is untouched and no second order/event was created.
         assertThat(orderRepository.count()).isEqualTo(1);
         assertThat(orderRepository.findById(first.id())).isPresent();
-        assertThat(outboxEventRepository.count()).isEqualTo(2);
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
     }
 
     @Test
@@ -182,7 +186,7 @@ class OrderCreateIntegrationTest {
 
         assertThat(replay.id()).isEqualTo(first.id());
         assertThat(orderRepository.count()).isEqualTo(1);
-        assertThat(outboxEventRepository.count()).isEqualTo(2);
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
     }
 
     @Test

@@ -132,6 +132,9 @@ services:
       STOCK_BASE_URL: http://stock-service:8002/v1
       AUTH_BASE_URL: http://auth-service:8005/v1
       ORDERS_API_KEY: ${ORDERS_API_KEY:?voir .env}
+      # Paiement (REST) : encaissement de la Saga (POST /payments), puis commit du
+      # stock et passage à "paid" (ou release + "payment_failed" si refus).
+      PAYMENT_BASE_URL: http://payment-service:8003/v1
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
@@ -142,6 +145,8 @@ services:
       stock-service:
         condition: service_started
       auth-service:
+        condition: service_started
+      payment-service:
         condition: service_started
 
   # Service Auth (REST, Spring Boot)

@@ -22,4 +22,16 @@ public class UnconfiguredStockClient implements StockClient {
         log.warn("Stock service is not configured (set STOCK_BASE_URL): cannot reserve order {}", orderId);
         return StockReservationOutcome.UNCERTAIN;
     }
+
+    @Override
+    public StockOperationOutcome commit(int orderId) {
+        log.warn("Stock service is not configured (set STOCK_BASE_URL): cannot commit order {}", orderId);
+        return StockOperationOutcome.UNCERTAIN;
+    }
+
+    @Override
+    public StockOperationOutcome release(int orderId) {
+        log.warn("Stock service is not configured (set STOCK_BASE_URL): cannot release order {}", orderId);
+        return StockOperationOutcome.UNCERTAIN;
+    }
 }
