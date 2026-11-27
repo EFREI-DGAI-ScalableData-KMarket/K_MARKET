@@ -6,7 +6,7 @@
 CREATE SCHEMA IF NOT EXISTS orders;
 
 CREATE TABLE orders.customers (
-    id          SERIAL PRIMARY KEY,
+    id          INTEGER PRIMARY KEY,   -- = auth.users.id (JWT sub), assigned by Auth Service (no sequence)
     name        TEXT        NOT NULL,
     email       TEXT        NOT NULL UNIQUE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()

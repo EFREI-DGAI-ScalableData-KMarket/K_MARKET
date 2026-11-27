@@ -56,6 +56,10 @@ class OutboxAtomicityIntegrationTest {
 
     private Integer customerId;
 
+    /** Unique, explicitly-assigned customer ids (identity model: customers.id == auth user id). */
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT_CUSTOMER_ID =
+            new java.util.concurrent.atomic.AtomicInteger(3_000);
+
     @BeforeEach
     void setUp() {
         idempotencyKeyRepository.deleteAll();
@@ -65,6 +69,8 @@ class OutboxAtomicityIntegrationTest {
         customerRepository.deleteAll();
 
         Customer customer = new Customer();
+        // Identity model: customers.id == auth.users.id (JWT sub); assigned explicitly, not DB-generated.
+        customer.setId(NEXT_CUSTOMER_ID.getAndIncrement());
         customer.setName("Bob");
         customer.setEmail("bob+" + UUID.randomUUID() + "@market.test");
         customerId = customerRepository.save(customer).getId();

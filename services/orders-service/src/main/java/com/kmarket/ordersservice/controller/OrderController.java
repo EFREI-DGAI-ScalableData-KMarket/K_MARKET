@@ -105,16 +105,17 @@ public class OrderController {
      * {@code GET /orders/{order_id}} — reads a single order with its customer and its
      * priced lines ({@code OrderDetail}). Returns {@code 404} if the order is unknown.
      *
-     * <p>Ownership: a non-privileged caller may only read their own order ({@code 403}
-     * otherwise); {@code admin}/{@code analyst}/{@code logistics}/{@code service_account}
-     * may read any order.</p>
+     * <p>Ownership (identity model: {@code customer_id == auth user id == JWT sub}): a
+     * non-privileged caller may only read their own order; reading another customer's order
+     * returns {@code 404} (not {@code 403}) so its existence is not disclosed.
+     * {@code admin}/{@code analyst}/{@code logistics}/{@code service_account} may read any order.</p>
      */
     @GetMapping("/{order_id}")
     public OrderDetailResponse getOrder(
             Authentication authentication,
             @PathVariable("order_id") int orderId) {
         OrderDetailResponse order = orderService.getOrder(orderId);
-        orderOwnership.assertCanRead(authentication, order.customerId());
+        orderOwnership.assertCanReadOrNotFound(authentication, order.customerId(), orderId);
         return order;
     }
 

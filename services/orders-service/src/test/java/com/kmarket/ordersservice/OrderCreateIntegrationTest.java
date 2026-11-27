@@ -57,6 +57,10 @@ class OrderCreateIntegrationTest {
 
     private Integer customerId;
 
+    /** Unique, explicitly-assigned customer ids (identity model: customers.id == auth user id). */
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT_CUSTOMER_ID =
+            new java.util.concurrent.atomic.AtomicInteger(1_000);
+
     @BeforeEach
     void setUp() {
         outboxEventRepository.deleteAll();
@@ -68,6 +72,9 @@ class OrderCreateIntegrationTest {
         paymentClient.captureOutcome.set(PaymentOutcome.SUCCEEDED);
 
         Customer customer = new Customer();
+        // Identity model: customers.id == auth.users.id (JWT sub); it is assigned explicitly,
+        // not DB-generated. Use a unique positive id per test run.
+        customer.setId(NEXT_CUSTOMER_ID.getAndIncrement());
         customer.setName("Alice");
         customer.setEmail("alice+" + UUID.randomUUID() + "@market.test");
         customerId = customerRepository.save(customer).getId();

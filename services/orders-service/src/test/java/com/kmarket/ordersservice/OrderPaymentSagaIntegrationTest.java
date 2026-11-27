@@ -60,6 +60,10 @@ class OrderPaymentSagaIntegrationTest {
 
     private Integer customerId;
 
+    /** Unique, explicitly-assigned customer ids (identity model: customers.id == auth user id). */
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT_CUSTOMER_ID =
+            new java.util.concurrent.atomic.AtomicInteger(2_000);
+
     @BeforeEach
     void setUp() {
         outboxEventRepository.deleteAll();
@@ -83,6 +87,8 @@ class OrderPaymentSagaIntegrationTest {
         paymentClient.lastKey.set(null);
 
         Customer customer = new Customer();
+        // Identity model: customers.id == auth.users.id (JWT sub); assigned explicitly, not DB-generated.
+        customer.setId(NEXT_CUSTOMER_ID.getAndIncrement());
         customer.setName("Alice");
         customer.setEmail("alice+" + UUID.randomUUID() + "@market.test");
         customerId = customerRepository.save(customer).getId();

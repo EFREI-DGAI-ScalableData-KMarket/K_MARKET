@@ -351,8 +351,9 @@ class OrderControllerTest {
 
     @Test
     @WithMockUser(username = "42", roles = "catalog_manager")
-    void getOrder_otherCustomersOrder_returnsForbidden() throws Exception {
-        // Non-privileged caller (sub 42) reading an order owned by customer 99 -> 403.
+    void getOrder_otherCustomersOrder_returnsNotFound() throws Exception {
+        // Non-privileged caller (sub 42) reading an order owned by customer 99 -> 404
+        // (not 403): the order's existence must not be disclosed to a non-owner.
         OrderDetailResponse detail = new OrderDetailResponse(
                 7, 99, "paid", 1980,
                 OffsetDateTime.parse("2024-01-01T10:00:00Z"),
@@ -362,8 +363,8 @@ class OrderControllerTest {
         when(orderService.getOrder(7)).thenReturn(detail);
 
         mockMvc.perform(get("/orders/7"))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
     }
 
     // ---------------------------------------------------------------------

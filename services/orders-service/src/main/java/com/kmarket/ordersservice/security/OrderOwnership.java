@@ -55,19 +55,22 @@ public class OrderOwnership {
     }
 
     /**
-     * Verifies that {@code authentication} may read an order belonging to
-     * {@code ownerCustomerId}. Privileged roles may read any order; a regular customer
-     * may only read their own.
+     * Like single-order read ownership but denies a non-owner with {@code 404} instead of {@code 403} so a customer cannot even learn that another
+     * customer's order exists (resource-existence non-disclosure). Privileged roles
+     * ({@link #PRIVILEGED_AUTHORITIES}) may read any order.
      *
-     * @throws ApiException {@code 403} if a non-privileged caller reads another customer's order
+     * <p>Since {@code customer_id == auth user id == JWT sub}, the owner check compares the
+     * subject directly with the order's {@code customer_id}.</p>
+     *
+     * @throws ApiException {@code 404} if a non-privileged caller reads another customer's order
      */
-    public void assertCanRead(Authentication authentication, Integer ownerCustomerId) {
+    public void assertCanReadOrNotFound(Authentication authentication, Integer ownerCustomerId, int orderId) {
         if (isPrivileged(authentication)) {
             return;
         }
         Integer subjectId = parseSubjectId(authentication);
         if (subjectId == null || !subjectId.equals(ownerCustomerId)) {
-            throw ApiException.forbidden("You can only access your own orders");
+            throw ApiException.notFound("Order " + orderId + " not found");
         }
     }
 
