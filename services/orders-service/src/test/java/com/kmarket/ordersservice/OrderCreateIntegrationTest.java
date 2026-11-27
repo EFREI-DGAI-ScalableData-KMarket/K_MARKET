@@ -1,10 +1,14 @@
 package com.kmarket.ordersservice;
 
 import com.kmarket.ordersservice.dto.OrderCreateRequest;
+import com.kmarket.ordersservice.dto.OrderDetailResponse;
 import com.kmarket.ordersservice.dto.OrderResponse;
 import com.kmarket.ordersservice.entity.Customer;
+import com.kmarket.ordersservice.entity.OrderItem;
 import com.kmarket.ordersservice.event.OrderEvent;
 import com.kmarket.ordersservice.exception.ApiException;
+import com.kmarket.ordersservice.client.PaymentOutcome;
+import com.kmarket.ordersservice.client.StockReservationOutcome;
 import com.kmarket.ordersservice.repository.CustomerRepository;
 import com.kmarket.ordersservice.repository.IdempotencyKeyRepository;
 import com.kmarket.ordersservice.repository.OrderItemRepository;
@@ -16,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
@@ -29,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * (Testcontainers) PostgreSQL seeded with the {@code orders} schema.
  */
 @SpringBootTest
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, TestCatalogConfiguration.class, TestStockConfiguration.class, TestPaymentConfiguration.class})
 @TestPropertySource(properties = "orders.outbox.relay.enabled=false")
 class OrderCreateIntegrationTest {
 
@@ -45,8 +50,16 @@ class OrderCreateIntegrationTest {
     private CustomerRepository customerRepository;
     @Autowired
     private OutboxEventRepository outboxEventRepository;
+    @Autowired
+    private TestStockConfiguration.ControllableStockClient stockClient;
+    @Autowired
+    private TestPaymentConfiguration.ControllablePaymentClient paymentClient;
 
     private Integer customerId;
+
+    /** Unique, explicitly-assigned customer ids (identity model: customers.id == auth user id). */
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT_CUSTOMER_ID =
+            new java.util.concurrent.atomic.AtomicInteger(1_000);
 
     @BeforeEach
     void setUp() {
@@ -55,8 +68,13 @@ class OrderCreateIntegrationTest {
         orderItemRepository.deleteAll();
         orderRepository.deleteAll();
         customerRepository.deleteAll();
+        stockClient.outcome.set(StockReservationOutcome.RESERVED);
+        paymentClient.captureOutcome.set(PaymentOutcome.SUCCEEDED);
 
         Customer customer = new Customer();
+        // Identity model: customers.id == auth.users.id (JWT sub); it is assigned explicitly,
+        // not DB-generated. Use a unique positive id per test run.
+        customer.setId(NEXT_CUSTOMER_ID.getAndIncrement());
         customer.setName("Alice");
         customer.setEmail("alice+" + UUID.randomUUID() + "@market.test");
         customerId = customerRepository.save(customer).getId();
@@ -71,7 +89,8 @@ class OrderCreateIntegrationTest {
 
         OrderResponse created = orderService.createOrder(key, request);
 
-        // Order head persisted with a computed total and the happy-path status.
+        // Order head persisted with a computed total; after a successful reservation AND
+        // payment the Saga has moved it pending -> stock_reserved -> paid.
         assertThat(created.id()).isNotNull();
         assertThat(created.customerId()).isEqualTo(customerId);
         assertThat(created.status()).isEqualTo("paid");
@@ -83,17 +102,39 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isEqualTo(2);
         assertThat(idempotencyKeyRepository.findById(key)).isPresent();
 
-        // Exactly one order_placed event was staged in the outbox, in the same transaction.
-        assertThat(outboxEventRepository.count()).isEqualTo(1);
-        var event = outboxEventRepository.findAll().get(0);
-        assertThat(event.getTopic()).isEqualTo("orders.events");
-        assertThat(event.getEventKey()).isEqualTo(String.valueOf(created.id()));
-        assertThat(event.getPublishedAt()).isNull();
-        assertThat(event.getPayload())
+        // Three events staged: order_placed (Tx1) + status_changed to stock_reserved + to paid.
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
+        var placed = outboxEventRepository.findAll().stream()
+                .filter(e -> e.getPayload().contains(OrderEvent.ORDER_PLACED))
+                .findFirst()
+                .orElseThrow();
+        assertThat(placed.getTopic()).isEqualTo("orders.events");
+        assertThat(placed.getEventKey()).isEqualTo(String.valueOf(created.id()));
+        assertThat(placed.getPublishedAt()).isNull();
+        assertThat(placed.getPayload())
                 .contains("\"event_type\"")
                 .contains(OrderEvent.ORDER_PLACED)
                 .contains("\"order_id\"")
                 .contains(String.valueOf(created.id()));
+    }
+
+    @Test
+    void getOrder_returnsFrozenProductName_withoutCallingCatalog() {
+        String key = UUID.randomUUID().toString();
+        OrderResponse created = orderService.createOrder(key, new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 2))));
+
+        // The line stored product_name at creation time; getOrder reads it from the DB.
+        OrderItem storedLine = orderItemRepository.findByOrderIdOrderById(created.id()).get(0);
+        assertThat(storedLine.getProductName()).isEqualTo("Product #101");
+
+        OrderDetailResponse detail = orderService.getOrder(created.id());
+        assertThat(detail.items()).hasSize(1);
+        OrderDetailResponse.Item item = detail.items().get(0);
+        assertThat(item.productId()).isEqualTo(101);
+        assertThat(item.productName()).isEqualTo("Product #101");
+        assertThat(item.quantity()).isEqualTo(2);
+        assertThat(item.lineTotalCents()).isEqualTo(item.unitPriceCents() * 2);
     }
 
     @Test
@@ -111,8 +152,48 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isEqualTo(1);
         assertThat(idempotencyKeyRepository.count()).isEqualTo(1);
 
-        // The idempotent replay must NOT stage a second event.
-        assertThat(outboxEventRepository.count()).isEqualTo(1);
+        // First create staged three events (placed + stock_reserved + paid); replay stages none.
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
+    }
+
+    @Test
+    void createOrder_sameKeyDifferentRequest_returnsConflict() {
+        String key = UUID.randomUUID().toString();
+        OrderResponse first = orderService.createOrder(key, new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 1))));
+
+        // Same key, different payload (quantity changed) -> 409, not a silent replay.
+        var differentRequest = new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 5)));
+
+        assertThatThrownBy(() -> orderService.createOrder(key, differentRequest))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.CONFLICT));
+
+        // The original order is untouched and no second order/event was created.
+        assertThat(orderRepository.count()).isEqualTo(1);
+        assertThat(orderRepository.findById(first.id())).isPresent();
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
+    }
+
+    @Test
+    void createOrder_sameKeyRequestReordered_isStillIdempotentReplay() {
+        String key = UUID.randomUUID().toString();
+        var request = new OrderCreateRequest(customerId, List.of(
+                new OrderCreateRequest.Item(101, 2),
+                new OrderCreateRequest.Item(202, 1)));
+        // Same lines, different order: the canonical hash must match -> safe replay.
+        var reordered = new OrderCreateRequest(customerId, List.of(
+                new OrderCreateRequest.Item(202, 1),
+                new OrderCreateRequest.Item(101, 2)));
+
+        OrderResponse first = orderService.createOrder(key, request);
+        OrderResponse replay = orderService.createOrder(key, reordered);
+
+        assertThat(replay.id()).isEqualTo(first.id());
+        assertThat(orderRepository.count()).isEqualTo(1);
+        assertThat(outboxEventRepository.count()).isEqualTo(3);
     }
 
     @Test
@@ -129,5 +210,48 @@ class OrderCreateIntegrationTest {
         assertThat(orderItemRepository.count()).isZero();
         assertThat(idempotencyKeyRepository.count()).isZero();
         assertThat(outboxEventRepository.count()).isZero();
+    }
+
+    @Test
+    void createOrder_insufficientStock_rejectsOrderWithoutPayment() {
+        stockClient.outcome.set(StockReservationOutcome.INSUFFICIENT);
+        String key = UUID.randomUUID().toString();
+        var request = new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 3)));
+
+        // Reservation fails -> 422, no payment attempted.
+        assertThatThrownBy(() -> orderService.createOrder(key, request))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
+
+        // The order IS persisted (id generated by PostgreSQL) but transitioned to 'rejected'.
+        assertThat(orderRepository.count()).isEqualTo(1);
+        var order = orderRepository.findAll().get(0);
+        assertThat(order.getStatus()).isEqualTo("rejected");
+        // Never reached 'paid'/'stock_reserved'.
+        assertThat(order.getStatus()).isNotEqualTo("stock_reserved");
+        // order_placed + order_status_changed(->rejected) events staged.
+        assertThat(outboxEventRepository.count()).isEqualTo(2);
+    }
+
+    @Test
+    void createOrder_uncertainReservation_leavesOrderPending() {
+        stockClient.outcome.set(StockReservationOutcome.UNCERTAIN);
+        String key = UUID.randomUUID().toString();
+        var request = new OrderCreateRequest(customerId,
+                List.of(new OrderCreateRequest.Item(101, 1)));
+
+        // Uncertain outcome (e.g. timeout) -> 502, NOT treated as insufficient.
+        assertThatThrownBy(() -> orderService.createOrder(key, request))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY));
+
+        // The order stays 'pending' for reconciliation (not rejected, not reserved).
+        assertThat(orderRepository.count()).isEqualTo(1);
+        assertThat(orderRepository.findAll().get(0).getStatus()).isEqualTo("pending");
+        // Only the order_placed event (no status transition happened).
+        assertThat(outboxEventRepository.count()).isEqualTo(1);
     }
 }

@@ -5,6 +5,7 @@ Le seed n'écrit QUE dans les sources. Le Data Lake (raw -> staging -> curated -
 est alimenté par les pipelines d'ingestion, jamais directement par ce script.
 
 Idempotent : si les bases contiennent déjà des données, il ne fait rien (sauf avec --reset).
+Tous les clients ont un compte auth.users dédié : orders.customers.id = auth.users.id (= JWT sub).
 
 Variables d'environnement (voir .env.example) :
   PG_DSN, MONGO_URI, MONGO_DB, DEMO_PASSWORD,
@@ -99,7 +100,7 @@ DEMO_ACCOUNTS = [  # comptes fixes pour la démo (un par rôle humain)
     ("logistics@market.test", "logistics"),
 ]
 
-DEMO_CUSTOMERS = [  # clients de démo (rôle customer), reliés à orders.customers par user_id (D7)
+DEMO_CUSTOMERS = [  # clients de démo (rôle customer) : orders.customers.id == auth.users.id (JWT sub)
     "client1@market.test",
     "client2@market.test",
     "client3@market.test",
@@ -125,7 +126,7 @@ PG_TABLES = [
     "auth.refresh_tokens", "auth.api_keys", "auth.user_roles", "auth.users",  # auth.roles : référence, jamais vidée
 ]
 SERIAL_TABLES = [
-    "orders.customers", "orders.orders", "orders.order_items", "payments.payments",
+    "orders.orders", "orders.order_items", "payments.payments",
     "inventory.warehouses", "inventory.reservations", "inventory.shipments",
     "auth.users", "auth.api_keys", "auth.refresh_tokens",
 ]
@@ -152,6 +153,8 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--reset", action="store_true", help="Vide les tables et la collection avant insertion")
     args = p.parse_args()
+    if args.customers < len(DEMO_CUSTOMERS):
+        p.error(f"--customers doit être >= {len(DEMO_CUSTOMERS)} pour inclure les comptes clients de démo")
     if not args.pg_dsn or not args.mongo_uri:
         p.error("PG_DSN et MONGO_URI sont obligatoires (variables d'environnement ou options)")
     return args
@@ -372,7 +375,7 @@ def status_for_age(age):
 PAID_STATUSES = {"paid", "preparing", "shipped", "delivered"}
 
 
-def iter_orders(args, products, weight, group_of, comeback_group, now):
+def iter_orders(args, products, weight, group_of, comeback_group, now, customer_ids):
     """Produit les commandes dans l'ordre chronologique, sans tout garder en mémoire."""
     price = {p["product_id"]: p["price_cents"] for p in products}
     active = [p["product_id"] for p in products if p["status"] == "active"]
@@ -394,7 +397,7 @@ def iter_orders(args, products, weight, group_of, comeback_group, now):
         events.append((ts, None))
     # Rafales de fraude : même client, petits montants, paiements refusés, quelques secondes d'écart
     for _ in range(args.fraud_bursts):
-        cid = random.randint(1, args.customers)
+        cid = random.choice(customer_ids)
         start = now - timedelta(days=random.randint(1, 30), seconds=random.randint(0, 80_000))
         for k in range(random.randint(12, 20)):
             events.append((start + timedelta(seconds=k * random.randint(3, 9)), cid))
@@ -414,7 +417,7 @@ def iter_orders(args, products, weight, group_of, comeback_group, now):
                     break
                 product_ids.add(random.choices(active, cum_weights=cum)[0])
             product_ids = list(product_ids)
-            customer_id = random.randint(1, args.customers)
+            customer_id = random.choice(customer_ids)
 
         items = [(pid, random.choices([1, 2, 3], weights=[80, 15, 5])[0], price[pid]) for pid in product_ids]
         total = sum(q * u for _, q, u in items)
@@ -435,7 +438,7 @@ def iter_orders(args, products, weight, group_of, comeback_group, now):
 def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
     """Lignes PostgreSQL d'une commande : order, items, payment, reservations, shipment."""
     ts, status = o["created_at"], o["status"]
-    idem_keys = []  
+    idem_keys = []
     items, reservations, payments, shipments = [], [], [], []
     updated_at = ts
 
@@ -484,32 +487,45 @@ def expand_order(o, stock_wh, all_wids, now, item_id, res_id, pay_id, ship_id):
 
 # Comptes internes (auth)
 
-def build_auth(args, fake, now, demo_password, role_id):
-    """role_id : {nom: id}, lu dans auth.roles (créée par 05_auth.sql)."""
+def build_auth(args, fake, now, demo_password, role_id, customer_profiles):
+    """Crée un compte Auth par client, avec customers.id == auth.users.id (= JWT sub).
 
+    customer_profiles : [(ancien_cid_temporaire, nom, email, created_at), ...].
+    Les trois premiers profils sont des clients de démo aux emails prédéfinis.
+    Tous les clients obtiennent le rôle customer et le même mot de passe de DÉMO.
+    """
     user_rows, user_role_rows = [], []
+    # Tous les comptes de démonstration partagent le même mot de passe :
+    # un unique hash bcrypt suffit pour les données synthétiques et évite
+    # des milliers d'opérations bcrypt inutiles.
+    demo_hash = bcrypt_hash(demo_password)
+
     for email, role in DEMO_ACCOUNTS:
         uid = len(user_rows) + 1
-        user_rows.append((uid, email, bcrypt_hash(demo_password), True, now - timedelta(days=365)))
+        user_rows.append((uid, email, demo_hash, True, now - timedelta(days=365)))
         user_role_rows.append((uid, role_id[role]))
 
     human_roles = ["catalog_manager", "analyst", "logistics"]
     for _ in range(args.users):
         uid = len(user_rows) + 1
         email = f"{fake.unique.user_name()}@market.test"
-        user_rows.append((uid, email, bcrypt_hash(demo_password), random.random() < 0.9,
+        user_rows.append((uid, email, demo_hash, random.random() < 0.9,
                           now - timedelta(days=random.randint(0, 365))))
         user_role_rows.append((uid, role_id[random.choice(human_roles)]))
 
     api_key_rows = [(i, name, sha256(require_env(env)), role_id["service_account"], True, now)
                     for i, (name, env) in enumerate(SERVICE_KEYS, start=1)]
-    customer_links = []  # (customer_id, user_id, email)
-    for cid, email in enumerate(DEMO_CUSTOMERS, start=1):
+
+    customer_rows = []
+    for index, (_, name, generated_email, created_at) in enumerate(customer_profiles):
         uid = len(user_rows) + 1
-        user_rows.append((uid, email, bcrypt_hash(demo_password), True, now - timedelta(days=200)))
+        email = DEMO_CUSTOMERS[index] if index < len(DEMO_CUSTOMERS) else generated_email
+        user_rows.append((uid, email, demo_hash, True, created_at))
         user_role_rows.append((uid, role_id["customer"]))
-        customer_links.append((cid, uid, email))
-    return user_rows, user_role_rows, api_key_rows, customer_links
+        customer_rows.append((uid, name, email, created_at, uid))
+
+    assert all(row[0] == row[4] for row in customer_rows)
+    return user_rows, user_role_rows, api_key_rows, customer_rows
 
 
 
@@ -580,7 +596,13 @@ def main():
                 execute_values(cur, sql, rows, page_size=5000)
 
             if args.reset:
-                cur.execute(f"TRUNCATE {', '.join(PG_TABLES)} RESTART IDENTITY CASCADE")
+                # L'outbox Orders existe après migration et peut contenir des événements
+                # issus des anciennes commandes. On le purge également s'il existe.
+                tables = list(PG_TABLES)
+                cur.execute("SELECT to_regclass('orders.outbox') IS NOT NULL")
+                if cur.fetchone()[0]:
+                    tables.insert(0, "orders.outbox")
+                cur.execute(f"TRUNCATE {', '.join(tables)} RESTART IDENTITY CASCADE")
 
             # Partitions couvrant tout l'historique généré (évite la partition DEFAULT)
             cur.execute("SELECT orders.ensure_monthly_partitions(%s, %s)",
@@ -592,12 +614,12 @@ def main():
             if not expected <= role_id.keys():
                 sys.exit(f"Rôles manquants dans auth.roles : {sorted(expected - role_id.keys())} "
                          "(créés par db/postgres/05_auth.sql)")
-            user_rows, user_role_rows, api_key_rows, customer_links = build_auth(args, fake, now, demo_password, role_id)
-            # Le client relié prend l'email de son compte ; les autres n'ont pas de compte (user_id NULL).
-            linked = {cid: (uid, email) for cid, uid, email in customer_links}
-            customer_rows = [(cid, name, linked[cid][1] if cid in linked else email, created,
-                              linked[cid][0] if cid in linked else None)
-                             for cid, name, email, created in customer_rows]
+            user_rows, user_role_rows, api_key_rows, customer_rows = build_auth(
+                args, fake, now, demo_password, role_id, customer_rows
+            )
+            # Toutes les commandes doivent utiliser les IDs Auth, jamais l'ancien
+            # intervalle 1..args.customers (qui pourrait désigner un autre rôle).
+            customer_ids = [row[0] for row in customer_rows]
             ins("INSERT INTO auth.users (id, email, password_hash, is_active, created_at) VALUES %s", user_rows)
             ins("INSERT INTO auth.user_roles (user_id, role_id) VALUES %s", user_role_rows)
             ins("INSERT INTO auth.api_keys (id, name, key_hash, role_id, is_active, created_at) VALUES %s", api_key_rows)
@@ -605,7 +627,11 @@ def main():
             ins("INSERT INTO inventory.warehouses (id, name, capacity_units) VALUES %s",
                 [(wid, name, cap) for wid, name, cap, _ in warehouses])
             ins("INSERT INTO inventory.stock (product_id, warehouse_id, quantity, updated_at) VALUES %s", stock_rows)
-            ins("INSERT INTO orders.customers (id, name, email, created_at, user_id) VALUES %s", customer_rows)
+            # orders.customers.id == auth.users.id (JWT sub) : la nouvelle table n'a plus de
+            # colonne user_id. customer_rows porte un uid final (row[4]) utilisé seulement
+            # pour l'assert de cohérence ci-dessus ; on n'insère que les colonnes réelles.
+            ins("INSERT INTO orders.customers (id, name, email, created_at) VALUES %s",
+                [(cid, name, email, created_at) for cid, name, email, created_at, _uid in customer_rows])
 
             buf = {"o": [], "i": [], "p": [], "r": [], "s": [],"k": []}
             ids = [1, 1, 1, 1]  # item_id, res_id, pay_id, ship_id
@@ -615,7 +641,7 @@ def main():
                     buf["o"])
                 ins("INSERT INTO orders.order_items (id, order_id, order_created_at, product_id, quantity, "
                     "unit_price_cents) VALUES %s", buf["i"])
-                if buf["k"]:                                             
+                if buf["k"]:
                     ins("INSERT INTO orders.idempotency_keys (idempotency_key, order_id, order_created_at) VALUES %s",
                         buf["k"])
                 if buf["p"]:
@@ -627,13 +653,13 @@ def main():
                 if buf["s"]:
                     ins("INSERT INTO inventory.shipments (id, order_id, warehouse_id, status, created_at, "
                         "shipped_at, delivered_at) VALUES %s", buf["s"])
-                
+
                 for k, key in (("orders", "o"), ("items", "i"), ("payments", "p"),
                                ("reservations", "r"), ("shipments", "s"), ("idem_keys", "k")):
                     counts[k] += len(buf[key])
                     buf[key].clear()
 
-            for o in iter_orders(args, products, weight, group_of, comeback_group, now):
+            for o in iter_orders(args, products, weight, group_of, comeback_group, now, customer_ids):
                 order_row, items, pays, ress, ships,idem_keys, *new_ids = expand_order(o, stock_wh, all_wids, now, *ids)
                 ids = new_ids
                 buf["o"].append(order_row)
@@ -641,7 +667,7 @@ def main():
                 buf["p"] += pays
                 buf["r"] += ress
                 buf["s"] += ships
-                buf["k"] += idem_keys  
+                buf["k"] += idem_keys
                 status_count[o["status"]] = status_count.get(o["status"], 0) + 1
                 if len(buf["o"]) >= BATCH_ORDERS:
                     flush()
@@ -665,7 +691,7 @@ def main():
         by_cat[p["category"]] = by_cat.get(p["category"], 0) + 1
     print("Données générées :")
     print(f"  MongoDB    catalog        {len(products):>9}  {by_cat}")
-    print(f"  PostgreSQL customers      {len(customer_rows):>9}")
+    print(f"  PostgreSQL customers      {len(customer_rows):>9}  (tous avec auth.users.id = customers.id)")
     print(f"             orders         {counts['orders']:>9}  {dict(sorted(status_count.items()))}")
     print(f"             order_items    {counts['items']:>9}")
     print(f"             payments       {counts['payments']:>9}")
@@ -676,7 +702,8 @@ def main():
     print(f"             stock          {len(stock_rows):>9}  (dont {sum(1 for r in stock_rows if r[2] == 0)} à zéro)")
     print(f"             users / roles  {len(user_rows):>5} / {len(role_id)}   api_keys {len(api_key_rows)}")
     print(f"  Groupe en comeback (pic) : {comeback_group}")
-    print(f"  Comptes de démo : {', '.join(e for e, _ in DEMO_ACCOUNTS)} (mot de passe : $DEMO_PASSWORD)")
+    print(f"  Comptes de démo internes : {', '.join(e for e, _ in DEMO_ACCOUNTS)}")
+    print(f"  Comptes clients de démo : {', '.join(DEMO_CUSTOMERS)} (mot de passe : $DEMO_PASSWORD)")
 
 
 if __name__ == "__main__":

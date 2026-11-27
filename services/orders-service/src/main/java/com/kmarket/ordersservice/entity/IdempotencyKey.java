@@ -34,13 +34,23 @@ public class IdempotencyKey {
     @Column(name = "order_created_at", nullable = false)
     private OffsetDateTime orderCreatedAt;
 
+    /**
+     * Fingerprint of the original request body. A retry with the same key but a different
+     * payload is a client mistake and is rejected (409) instead of replaying the first order.
+     * Nullable for rows created before this column existed.
+     */
+    @Column(name = "request_hash")
+    private String requestHash;
+
     @Generated(event = EventType.INSERT)
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    public IdempotencyKey(String idempotencyKey, Integer orderId, OffsetDateTime orderCreatedAt) {
+    public IdempotencyKey(String idempotencyKey, Integer orderId, OffsetDateTime orderCreatedAt,
+                          String requestHash) {
         this.idempotencyKey = idempotencyKey;
         this.orderId = orderId;
         this.orderCreatedAt = orderCreatedAt;
+        this.requestHash = requestHash;
     }
 }

@@ -22,7 +22,7 @@ Les décisions citées (D1 à D6) sont dans [`decisions.md`](decisions.md), les 
 - **Pas de clé étrangère entre services.** `product_id` et `order_id` sont des liens logiques, vérifiés par le code.
 - **Montants en centimes** (`INTEGER`) dans les deux bases : pas d'erreur d'arrondi.
 - **Dates en `TIMESTAMPTZ`** (stockées en UTC).
-- **Clients ≠ utilisateurs** : `orders.customers` sont les clients du site, `auth.users` l'équipe Market.
+- **Clients ≠ utilisateurs, mais même identifiant** : `orders.customers` sont les clients du site, `auth.users` l'équipe Market **et** les comptes clients. Pour un client, `orders.customers.id = auth.users.id` (= `sub` du JWT) : l'ID est généré par le service Auth, pas par une séquence PostgreSQL ; pas de clé étrangère inter-services (lien logique).
 - **Rôles PostgreSQL ≠ rôles applicatifs** : les premiers protègent les tables, les seconds (`auth.roles`) protègent les API.
 
 ```mermaid

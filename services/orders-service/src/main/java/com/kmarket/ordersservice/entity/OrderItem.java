@@ -41,6 +41,13 @@ public class OrderItem {
     @Column(name = "product_id", nullable = false)
     private Integer productId;
 
+    /**
+     * Product display name, frozen from the Catalog at order time.
+     * Nullable for rows created before this column existed.
+     */
+    @Column(name = "product_name")
+    private String productName;
+
     @Column(nullable = false)
     private Integer quantity;
 

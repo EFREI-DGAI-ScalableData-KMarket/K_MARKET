@@ -6,7 +6,7 @@
 CREATE SCHEMA IF NOT EXISTS orders;
 
 CREATE TABLE orders.customers (
-    id          SERIAL PRIMARY KEY,
+    id          INTEGER PRIMARY KEY,   -- = auth.users.id (JWT sub), assigned by Auth Service (no sequence)
     name        TEXT        NOT NULL,
     email       TEXT        NOT NULL UNIQUE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -25,7 +25,8 @@ CREATE TABLE orders.orders (
                      'shipped',
                      'delivered',
                      'payment_failed',
-                     'cancelled'
+                     'cancelled',
+                     'rejected'
                  )),
     total_cents  INTEGER     NOT NULL CHECK (total_cents >= 0),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -38,6 +39,7 @@ CREATE TABLE orders.order_items (
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,
     product_id        INTEGER     NOT NULL,
+    product_name      TEXT,
     quantity          INTEGER     NOT NULL CHECK (quantity > 0),
     unit_price_cents  INTEGER     NOT NULL CHECK (unit_price_cents >= 0),
     PRIMARY KEY (id, order_created_at),
@@ -49,6 +51,7 @@ CREATE TABLE orders.idempotency_keys (
     idempotency_key   TEXT        PRIMARY KEY,
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,
+    request_hash      TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     FOREIGN KEY (order_id, order_created_at)
         REFERENCES orders.orders (id, created_at) ON DELETE CASCADE

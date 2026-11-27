@@ -35,4 +35,9 @@ public class ApiException extends RuntimeException {
     public static ApiException conflict(String message) {
         return new ApiException(HttpStatus.CONFLICT, "CONFLICT", message);
     }
+
+    /** Service unreachable or returned an error. */
+    public static ApiException upstream(String message) {
+        return new ApiException(HttpStatus.BAD_GATEWAY, "UPSTREAM_ERROR", message);
+    }
 }

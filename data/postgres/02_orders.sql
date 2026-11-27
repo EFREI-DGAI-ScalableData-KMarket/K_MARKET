@@ -1,10 +1,9 @@
 BEGIN;
 
 CREATE TABLE orders.customers (
-    id          SERIAL PRIMARY KEY,
-    name        TEXT        NOT NULL,
-    email       TEXT        NOT NULL UNIQUE,   -- donnée personnelle : pseudonymisée dès la zone staging du lake
-    user_id  INTEGER UNIQUE,  -- auth.users.id du compte client ; sans FK : autre service, comme product_id
+    id          INTEGER PRIMARY KEY,  -- = auth.users.id (JWT sub), assigned by Auth Service
+    name        TEXT NOT NULL,
+    email       TEXT NOT NULL UNIQUE,  -- pseudonymisée dès la zone staging du Data Lake
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -21,7 +20,8 @@ CREATE TABLE orders.orders (
                      'shipped',
                      'delivered',
                      'payment_failed',   --  réservation libérée
-                     'cancelled'         -- annulée par le client ou un admin
+                     'cancelled',        -- annulée par le client ou un admin
+                     'rejected'          -- stock insuffisant à la réservation (aucun paiement tenté)
                  )),
     total_cents  INTEGER     NOT NULL CHECK (total_cents >= 0),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -34,6 +34,7 @@ CREATE TABLE orders.order_items (
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,   -- recopiée pour la FK composite et le partitionnement
     product_id        INTEGER     NOT NULL,   -- lien logique -> MongoDB catalog.product_id
+    product_name      TEXT,                   -- nom figé au moment de la commande (lu du Catalogue), évite un appel à la lecture
     quantity          INTEGER     NOT NULL CHECK (quantity > 0),
     unit_price_cents  INTEGER     NOT NULL CHECK (unit_price_cents >= 0),  -- prix figé au moment de la commande
     PRIMARY KEY (id, order_created_at),
@@ -46,6 +47,7 @@ CREATE TABLE orders.idempotency_keys (
     idempotency_key   TEXT        PRIMARY KEY,   -- en-tête Idempotency-Key envoyé par le client
     order_id          INTEGER     NOT NULL,
     order_created_at  TIMESTAMPTZ NOT NULL,
+    request_hash      TEXT,                      -- empreinte de la requête : même clé + requête différente -> 409
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     FOREIGN KEY (order_id, order_created_at)
         REFERENCES orders.orders (id, created_at) ON DELETE CASCADE

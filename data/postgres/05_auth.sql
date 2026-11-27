@@ -1,5 +1,6 @@
 -- 05_auth.sql — schéma auth (service Auth, bonus)
--- auth.users = l'équipe Market. Aucun lien avec orders.customers (les clients du site).
+-- auth.users = l'équipe Market ET les comptes clients. Pour un client, auth.users.id
+-- est réutilisé comme orders.customers.id (= sub du JWT) : lien logique, sans clé étrangère.
 
 BEGIN;
 

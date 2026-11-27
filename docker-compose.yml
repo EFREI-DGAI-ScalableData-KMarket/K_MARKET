@@ -139,11 +139,29 @@ services:
       # service orders-outbox-relay dédié (profil "stream"), pas ici.
       KAFKA_BOOTSTRAP: kafka:19092
       ORDERS_OUTBOX_RELAY_ENABLED: "false"
+      # Catalogue (GraphQL) : valide les produits et récupère les prix (POST /orders).
+      CATALOG_BASE_URL: http://catalog-service:8004/v1
+      # Stock (REST) : réservation du stock (Saga). orders-api s'authentifie en
+      # service_account via auth-api (POST /auth/token avec ORDERS_API_KEY).
+      STOCK_BASE_URL: http://stock-service:8002/v1
+      AUTH_BASE_URL: http://auth-service:8005/v1
+      ORDERS_API_KEY: ${ORDERS_API_KEY:?voir .env}
+      # Paiement (REST) : encaissement de la Saga (POST /payments), puis commit du
+      # stock et passage à "paid" (ou release + "payment_failed" si refus).
+      PAYMENT_BASE_URL: http://payment-service:8003/v1
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
       postgres:
         condition: service_healthy
+      catalog-service:
+        condition: service_started
+      stock-service:
+        condition: service_started
+      auth-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
 
   # Service Auth (REST, Spring Boot)
   auth-service:
@@ -158,6 +176,23 @@ services:
       JWT_SECRET: ${JWT_SECRET:?voir .env}
     ports:
       - "127.0.0.1:8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Service Paiement (REST, Spring Boot)
+  payment-service:
+    build: ./services/payment-service
+    container_name: payment-service
+    restart: unless-stopped
+    environment:
+      # Compte dédié créé par data/postgres/08_roles.sh (moindre privilège, pas root).
+      PAYMENTS_DB_URL: jdbc:postgresql://postgres:5432/kmarket
+      PAYMENTS_DB_USER: payments_svc
+      PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?voir .env}
+      JWT_SECRET: ${JWT_SECRET:?voir .env}
+    ports:
+      - "127.0.0.1:8003:8003"
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,30 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="OrdersServiceApplication" type="SpringBootApplicationConfigurationType"
+                 factoryName="Spring Boot">
+    <module name="orders-service" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="com.kmarket.ordersservice.OrdersServiceApplication" />
+    <!--
+      Local run/debug from the IDE. The platform secrets live in the repo-root .env
+      (git-ignored); the IDE does not read .env automatically, so the orders-service
+      datasource password and JWT secret are injected here as environment variables.
+      Values mirror .env.example / .env for a default local stack started with `make up`.
+      Requires PostgreSQL to be up (make up). Override any value in your own copy if your
+      .env differs.
+    -->
+    <envs>
+      <env name="ORDERS_DB_PASSWORD" value="orders" />
+      <env name="JWT_SECRET" value="kmarket-local-development-jwt-secret-32chars" />
+      <!-- Saga dependencies: point at the services published on localhost by docker-compose. -->
+      <env name="CATALOG_BASE_URL" value="http://localhost:8004/v1" />
+      <env name="STOCK_BASE_URL" value="http://localhost:8002/v1" />
+      <env name="PAYMENT_BASE_URL" value="http://localhost:8003/v1" />
+      <env name="AUTH_BASE_URL" value="http://localhost:8005/v1" />
+      <env name="ORDERS_API_KEY" value="orders-api-key" />
+      <!-- The Kafka outbox relay needs a broker; disable it for a DB-only local run. -->
+      <env name="ORDERS_OUTBOX_RELAY_ENABLED" value="false" />
+    </envs>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

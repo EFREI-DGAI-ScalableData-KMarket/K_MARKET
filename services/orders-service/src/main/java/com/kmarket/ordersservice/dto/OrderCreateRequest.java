@@ -2,6 +2,7 @@ package com.kmarket.ordersservice.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -13,9 +14,9 @@ public record OrderCreateRequest(
         @NotNull @JsonProperty("customer_id") Integer customerId,
         @NotEmpty @Valid List<Item> items) {
 
-    /** A single requested line: a product and a (positive) quantity. */
+    /** A single requested line: a product and a (positive, bounded) quantity. */
     public record Item(
             @NotNull @JsonProperty("product_id") Integer productId,
-            @NotNull @Min(1) Integer quantity) {
+            @NotNull @Min(1) @Max(10_000) Integer quantity) {
     }
 }
