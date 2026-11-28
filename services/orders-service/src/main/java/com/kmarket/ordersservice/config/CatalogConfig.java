@@ -3,7 +3,15 @@ package com.kmarket.ordersservice.config;
 import com.kmarket.ordersservice.catalog.CatalogGraphQlClient;
 import com.kmarket.ordersservice.catalog.ProductCatalog;
 import com.kmarket.ordersservice.catalog.UnconfiguredProductCatalog;
+import com.kmarket.ordersservice.client.ResilientProductCatalog;
 import com.kmarket.ordersservice.client.ServiceTokenProvider;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.retry.RetryConfig;
+import io.github.resilience4j.retry.RetryRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,10 +47,13 @@ public class CatalogConfig {
 
     /** Short timeouts so a hung Catalog call fails fast with a clean 502 (same spirit as Stock/Payment). */
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(5);
 
     @Bean
     @ConditionalOnMissingBean(ProductCatalog.class)
-    public ProductCatalog productCatalog(ObjectProvider<RestClient.Builder> builder, Environment env) {
+    public ProductCatalog productCatalog(ObjectProvider<RestClient.Builder> builder, Environment env,
+                                         CircuitBreakerRegistry cbRegistry, RetryRegistry retryRegistry,
+                                         BulkheadRegistry bulkheadRegistry) {
         String baseUrl = env.getProperty("catalog.base-url", "").trim();
         if (baseUrl.isEmpty()) {
             log.warn("catalog.base-url is not set: POST /orders will fail with 502 until "
@@ -56,9 +67,13 @@ public class CatalogConfig {
                 .connectTimeout(CONNECT_TIMEOUT)
                 .build();
 
+        // Response/read timeout so a stalled Catalog never blocks a request thread indefinitely.
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(READ_TIMEOUT);
+
         RestClient.Builder restClientBuilder = builder.getIfAvailable(RestClient::builder)
                 .clone()
-                .requestFactory(new JdkClientHttpRequestFactory(httpClient));
+                .requestFactory(requestFactory);
 
         // Catalog is called with the orders service_account identity (decision D6), obtained
         // by exchanging ORDERS_API_KEY at auth-service — the same mechanism as Stock/Payment.
@@ -66,6 +81,16 @@ public class CatalogConfig {
         String apiKey = env.getProperty("orders.api-key", "").trim();
         ServiceTokenProvider tokenProvider = new ServiceTokenProvider(restClientBuilder, authBaseUrl, apiKey);
 
-        return new CatalogGraphQlClient(restClientBuilder, baseUrl + "/catalog", tokenProvider);
+        CatalogGraphQlClient real = new CatalogGraphQlClient(restClientBuilder, baseUrl + "/catalog", tokenProvider);
+
+        // Resilience4j: retry + circuit breaker + bulkhead, scoped to TRANSIENT failures only
+        // (5xx / transport). Business 4xx are never retried nor counted as breaker failures.
+        CircuitBreaker cb = cbRegistry.circuitBreaker("catalog", CircuitBreakerConfig.from(
+                cbRegistry.getConfiguration("catalog").orElse(cbRegistry.getDefaultConfig()))
+                .recordException(ResilientProductCatalog::isTransient).build());
+        Retry retry = retryRegistry.retry("catalog", RetryConfig.from(
+                retryRegistry.getConfiguration("catalog").orElse(retryRegistry.getDefaultConfig()))
+                .retryOnException(ResilientProductCatalog::isTransient).build());
+        return new ResilientProductCatalog(real, cb, retry, bulkheadRegistry.bulkhead("catalog"));
     }
 }

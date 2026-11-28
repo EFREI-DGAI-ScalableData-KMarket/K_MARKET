@@ -28,6 +28,7 @@
     </scm>
     <properties>
         <java.version>25</java.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
     </properties>
     <dependencies>
         <dependency>
@@ -55,6 +56,35 @@
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
+        <!-- Resilience4j: retry / circuit breaker / bulkhead for the Catalog, Stock and
+             Payment HTTP clients. The spring-boot3 starter is compatible with Spring Boot 4,
+             and pulls in resilience4j-micrometer so CB state is exposed via actuator. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>2.3.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-circuitbreaker</artifactId>
+                <version>${resilience4j.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-retry</artifactId>
+                <version>${resilience4j.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-bulkhead</artifactId>
+                <version>${resilience4j.version}</version>
+            </dependency>
         <!-- OpenAPI 3 + Swagger UI (interactive API docs at /v1/swagger-ui.html).
              3.x line targets Spring Boot 4 / Spring Framework 7. -->
         <dependency>

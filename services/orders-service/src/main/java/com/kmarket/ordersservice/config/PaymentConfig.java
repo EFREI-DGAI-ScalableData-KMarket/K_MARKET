@@ -2,8 +2,11 @@ package com.kmarket.ordersservice.config;
 
 import com.kmarket.ordersservice.client.PaymentClient;
 import com.kmarket.ordersservice.client.PaymentRestClient;
+import com.kmarket.ordersservice.client.ResilientPaymentClient;
 import com.kmarket.ordersservice.client.ServiceTokenProvider;
 import com.kmarket.ordersservice.client.UnconfiguredPaymentClient;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,7 +40,8 @@ public class PaymentConfig {
 
     @Bean
     @ConditionalOnMissingBean(PaymentClient.class)
-    public PaymentClient paymentClient(ObjectProvider<RestClient.Builder> builderProvider, Environment env) {
+    public PaymentClient paymentClient(ObjectProvider<RestClient.Builder> builderProvider, Environment env,
+                                       CircuitBreakerRegistry cbRegistry, BulkheadRegistry bulkheadRegistry) {
         String paymentBaseUrl = env.getProperty("payment.base-url", "").trim();
         if (paymentBaseUrl.isEmpty()) {
             log.warn("payment.base-url is not set: orders stay 'stock_reserved' (payment cannot be captured). "
@@ -57,6 +61,9 @@ public class PaymentConfig {
                 .requestFactory(requestFactory);
 
         ServiceTokenProvider tokenProvider = new ServiceTokenProvider(base, authBaseUrl, apiKey);
-        return new PaymentRestClient(base, paymentBaseUrl, tokenProvider);
+        PaymentClient real = new PaymentRestClient(base, paymentBaseUrl, tokenProvider);
+        // Circuit breaker + bulkhead, NO retry (a payment is a mutation: never blindly retry a timeout).
+        return new ResilientPaymentClient(real, cbRegistry.circuitBreaker("payment"),
+                bulkheadRegistry.bulkhead("payment"));
     }
 }

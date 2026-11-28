@@ -1,9 +1,12 @@
 package com.kmarket.ordersservice.config;
 
+import com.kmarket.ordersservice.client.ResilientStockClient;
 import com.kmarket.ordersservice.client.ServiceTokenProvider;
 import com.kmarket.ordersservice.client.StockClient;
 import com.kmarket.ordersservice.client.StockRestClient;
 import com.kmarket.ordersservice.client.UnconfiguredStockClient;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -36,7 +39,8 @@ public class StockConfig {
 
     @Bean
     @ConditionalOnMissingBean(StockClient.class)
-    public StockClient stockClient(ObjectProvider<RestClient.Builder> builderProvider, Environment env) {
+    public StockClient stockClient(ObjectProvider<RestClient.Builder> builderProvider, Environment env,
+                                   CircuitBreakerRegistry cbRegistry, BulkheadRegistry bulkheadRegistry) {
         String stockBaseUrl = env.getProperty("stock.base-url", "").trim();
         if (stockBaseUrl.isEmpty()) {
             log.warn("stock.base-url is not set: orders stay 'pending' (stock cannot be reserved). "
@@ -56,6 +60,9 @@ public class StockConfig {
                 .requestFactory(requestFactory);
 
         ServiceTokenProvider tokenProvider = new ServiceTokenProvider(base, authBaseUrl, apiKey);
-        return new StockRestClient(base, stockBaseUrl, tokenProvider);
+        StockClient real = new StockRestClient(base, stockBaseUrl, tokenProvider);
+        // Circuit breaker + bulkhead, NO retry (mutations: recovery is the idempotent Saga re-run).
+        return new ResilientStockClient(real, cbRegistry.circuitBreaker("stock"),
+                bulkheadRegistry.bulkhead("stock"));
     }
 }

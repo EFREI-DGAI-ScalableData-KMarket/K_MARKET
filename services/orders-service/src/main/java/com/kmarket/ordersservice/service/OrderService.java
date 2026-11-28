@@ -208,8 +208,18 @@ public class OrderService {
      * @return the created order after the Saga has run as far as it safely can
      */
     public OrderResponse createOrder(String idempotencyKey, OrderCreateRequest request) {
+        // Fast idempotency pre-check OUTSIDE any transaction/HTTP: a replay must not re-call the
+        // Catalog. The authoritative, race-safe check is still the unique insert inside Tx1.
+        if (idempotencyKeyRepository.findById(idempotencyKey).isPresent()) {
+            return resumeSaga(self.replayOrderId(idempotencyKey, requestHash(request)));
+        }
+
+        // Price the order by calling the Catalog BEFORE opening any DB transaction (Tx boundaries
+        // stay short; no HTTP call is ever made while a DB transaction is held).
+        PricedOrder priced = priceLines(request);
+
         // Tx1: persist the order as pending (or return the existing one on idempotent replay).
-        PersistResult persisted = self.persistPendingOrder(idempotencyKey, request);
+        PersistResult persisted = self.persistPendingOrder(idempotencyKey, request, priced);
         if (persisted.replay()) {
             // A replay is not necessarily a completed Saga: resume it from the persisted
             // status so a retry after an interruption/restart finishes the flow safely
@@ -374,34 +384,11 @@ public class OrderService {
      * its lines, idempotency key and {@code order_placed} event — all atomically. Makes no
      * external calls other than the Catalog lookup (read-only, idempotent).
      */
-    @Transactional
-    public PersistResult persistPendingOrder(String idempotencyKey, OrderCreateRequest request) {
-        String requestHash = requestHash(request);
-
-        // 1. Idempotency replay. Same key must mean the same request:
-        //    - identical payload -> return the order created the first time (safe retry);
-        //    - different payload -> 409, the key is being reused for a different order.
-        var existing = idempotencyKeyRepository.findById(idempotencyKey);
-        if (existing.isPresent()) {
-            IdempotencyKey key = existing.get();
-            if (key.getRequestHash() != null && !key.getRequestHash().equals(requestHash)) {
-                throw ApiException.conflict(
-                        "Idempotency-Key already used with a different request payload");
-            }
-            OrderResponse replay = orderRepository.findById(key.getOrderId())
-                    .map(OrderResponse::from)
-                    .orElseThrow(() -> ApiException.conflict(
-                            "Idempotency key already used but its order is missing"));
-            return PersistResult.replay(replay);
-        }
-
-        // 2. Validate the customer exists (FK orders.orders.customer_id -> orders.customers.id).
-        if (!customerRepository.existsById(request.customerId())) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "UNPROCESSABLE", "Unknown customer_id " + request.customerId());
-        }
-
-        // 3. Validate products and fetch prices from the Catalog in a single call
+    /**
+     * Non-transactional: prices the order by calling the Catalog (validates products, fetches
+     * prices). Done OUTSIDE any DB transaction so no HTTP call is held inside a transaction.
+     */
+    PricedOrder priceLines(OrderCreateRequest request) {
         Set<Integer> productIds = new LinkedHashSet<>();
         request.items().forEach(item -> productIds.add(item.productId()));
         Map<Integer, CatalogProduct> products = productCatalog.fetchByIds(productIds);
@@ -429,6 +416,52 @@ public class OrderService {
         if (totalCents > Integer.MAX_VALUE) {
             throw ApiException.badRequest("Order total exceeds the supported maximum");
         }
+        return new PricedOrder(lines, (int) totalCents);
+    }
+
+    /** Pre-priced order lines + total, produced by {@link #priceLines} before Tx1. */
+    public record PricedOrder(List<OrderItem> lines, int totalCents) {}
+
+    /** Resolves the order id for an idempotent replay (read-only), enforcing same-key-same-request. */
+    @Transactional(readOnly = true)
+    public int replayOrderId(String idempotencyKey, String requestHash) {
+        IdempotencyKey key = idempotencyKeyRepository.findById(idempotencyKey)
+                .orElseThrow(() -> ApiException.conflict("Idempotency key vanished"));
+        if (key.getRequestHash() != null && !key.getRequestHash().equals(requestHash)) {
+            throw ApiException.conflict("Idempotency-Key already used with a different request payload");
+        }
+        return key.getOrderId();
+    }
+
+    @Transactional
+    public PersistResult persistPendingOrder(String idempotencyKey, OrderCreateRequest request,
+                                             PricedOrder priced) {
+        String requestHash = requestHash(request);
+
+        // 1. Idempotency replay. Same key must mean the same request.
+        var existing = idempotencyKeyRepository.findById(idempotencyKey);
+        if (existing.isPresent()) {
+            IdempotencyKey key = existing.get();
+            if (key.getRequestHash() != null && !key.getRequestHash().equals(requestHash)) {
+                throw ApiException.conflict(
+                        "Idempotency-Key already used with a different request payload");
+            }
+            OrderResponse replay = orderRepository.findById(key.getOrderId())
+                    .map(OrderResponse::from)
+                    .orElseThrow(() -> ApiException.conflict(
+                            "Idempotency key already used but its order is missing"));
+            return PersistResult.replay(replay);
+        }
+
+        // 2. Validate the customer exists (FK orders.orders.customer_id -> orders.customers.id).
+        if (!customerRepository.existsById(request.customerId())) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "UNPROCESSABLE", "Unknown customer_id " + request.customerId());
+        }
+
+        // 3. Pricing was done before Tx1 (priceLines), outside any DB transaction.
+        List<OrderItem> lines = priced.lines();
+        long totalCents = priced.totalCents();
 
         // 4. Persist the order head as PENDING; flush to obtain the DB-generated id + created_at.
         Order order = new Order();
